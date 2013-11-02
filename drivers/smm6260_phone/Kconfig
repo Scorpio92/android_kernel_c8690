@@ -1,0 +1,22 @@
+#
+#
+#
+
+menuconfig SMM6260_PHONE
+	tristate "Smm6260 Phone Interface"
+	default n
+	---help---
+		smm6260 phone interface.
+if SMM6260_PHONE
+
+config SMM6260_MODEM
+	tristate "SMM6260 Modem support"
+	help
+	  Say Y here to enable SMM6260 modem control support.
+
+config MODEM_BOOT_IN_UBOOT
+	tristate "modem is booted in uboot"
+	help
+	  Say Y here to enable uboot power up modem.
+	  
+endif # SMM6260_PHONE

@@ -1,0 +1,12 @@
+#
+# ANC es305 device
+#
+
+
+config ANC_ES305
+	bool "ANC es305 device"
+	default no
+	help
+		ANC es305 device cowork with WM8994
+
+
