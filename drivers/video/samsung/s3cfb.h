@@ -138,6 +138,9 @@ struct s3cfb_fimd_desc {
 
 struct s3cfb_global {
 	void __iomem		*regs;
+	void __iomem		*regs_org;
+	void __iomem		*ielcd_regs;
+	void			*data;
 	struct mutex		lock;
 	struct device		*dev;
 	struct clk		*clock;
@@ -268,6 +271,7 @@ extern int s3cfb_display_on(struct s3cfb_global *ctrl);
 extern int s3cfb_display_off(struct s3cfb_global *ctrl);
 extern int s3cfb_set_clock(struct s3cfb_global *ctrl);
 extern int s3cfb_set_polarity(struct s3cfb_global *ctrl);
+extern int s3cfb_set_polarity_only(struct s3cfb_global *ctrl);
 extern int s3cfb_set_timing(struct s3cfb_global *ctrl);
 extern int s3cfb_set_lcd_size(struct s3cfb_global *ctrl);
 extern int s3cfb_set_global_interrupt(struct s3cfb_global *ctrl, int enable);

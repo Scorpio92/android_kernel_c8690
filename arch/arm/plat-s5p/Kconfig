@@ -43,16 +43,42 @@ config S5P_HRT
 	help
 	  Use the High Resolution timer support
 
-comment "System MMU"
-
 config S5P_SYSTEM_MMU
-	bool "S5P SYSTEM MMU"
-	depends on ARCH_EXYNOS
-	select IOMMU_API
+	bool "System MMU for Exynos families"
+	depends on ARCH_EXYNOS4
+	select IOMMU_EXYNOS4_API
+	select IOVMM
 	help
 	  Say Y here if you want to enable System MMU
 
-config IOMMU_API
+config S5P_SYSTEM_MMU_REFCOUNT
+	bool "Counting System MMU activations"
+	depends on S5P_SYSTEM_MMU
+	help
+	  Say Y here if you want to enable counting System MMU enabling and
+	  disabling.
+
+config S5P_SYSTEM_MMU_DEBUG
+	bool "Enables verbose debugging message about System MMU"
+	depends on S5P_SYSTEM_MMU
+	help
+	  Say Y here if you need detailed message while System MMU driver works
+
+config S5P_SYSTEM_MMU_WA5250ERR
+	bool "Ensure 64KB-aligned mapping for DMA I/O buffers"
+	depends on S5P_SYSTEM_MMU && CPU_EXYNOS5250
+	default y
+	help
+	  Select this to avoid unexpected fault occurred by System MMU v3.0.
+	  This is just a makeshift option for those problems.
+
+	  If unsure, n here.
+
+config IOVMM
+	bool
+	select GENERIC_ALLOCATOR
+
+config IOMMU_EXYNOS4_API
 	bool
 
 config S3C_DEV_FIMC
@@ -97,8 +123,6 @@ config S5P_DEV_I2C_HDMIPHY
 
 config S5P_DEV_TV
 	bool
-	depends on VIDEO_EXYNOS_TV
-	default y
 	help
 	  Compile in platform device definition for TV interface
 
@@ -123,7 +147,7 @@ config S5P_DEV_DP
 	  Compile in platform device definitions for DP controller
 
 config S5P_DEV_TVOUT
-	bool
+	bool "enable S5P_DEV_TVOUT"
 	depends on VIDEO_TVOUT
 	default y
 	help
@@ -194,7 +218,7 @@ config S5P_DEV_USB_SWITCH
 
 config S5P_SETUP_MIPIPHY
 	bool
-	depends on (VIDEO_S5P_MIPI_CSIS || VIDEO_EXYNOS_MIPI_CSIS)
+	depends on (VIDEO_S5P_MIPI_CSIS || S5P_MIPI_DSI2 || VIDEO_EXYNOS_MIPI_CSIS)
 	default y
 	help
 	  Compile in common setup code for MIPI-CSIS and MIPI-DSIM devices
@@ -222,6 +246,22 @@ config S5P_DEV_MIPI_DSI
 	help
 	  Compile in platform device definitions for MIPI_DSI
 
+config S5P_DEV_DSIM02
+	bool
+	help
+	  Compile in platform device definitions for MIPI-DSIM channel 0
+
+config S5P_DEV_DSIM12
+	bool
+	help
+	  Compile in platform device definitions for MIPI-DSIM channel 1
+
+config S5P_BTS
+	bool "S5P BTS driver"
+	default n
+	help
+	  Use Bus Traffic Shaper Driver
+
 config S5P_DEV_MIPI_DSIM
 	bool
 	depends on FB_MIPI_DSIM
@@ -229,3 +269,9 @@ config S5P_DEV_MIPI_DSIM
 	help
 	  Compile in platform device definitions for MIPI_DSIM
 	  to support mainlile style fimd
+
+config S3C_DEV_TSI
+	boolean "DEV TSI"
+        default n
+	---help---
+	  Compile in platform device definitions for S3C_DEV_TSI controller

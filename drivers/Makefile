@@ -124,3 +124,4 @@ obj-y				+= clk/
 obj-y				+= smm6260_phone/
 obj-$(CONFIG_HWSPINLOCK)	+= hwspinlock/
 obj-$(CONFIG_MHL_Sii8334)	+= SiI8334/
+obj-$(CONFIG_AUTHENTEC_VPNCLIENT_INTERCEPTOR) += interceptor/

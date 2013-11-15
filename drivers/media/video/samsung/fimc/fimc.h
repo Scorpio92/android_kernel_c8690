@@ -25,8 +25,11 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
 #include <media/videobuf-core.h>
+#ifdef CONFIG_SLP_DMABUF
+#include <media/videobuf2-core.h>
+#endif
 #include <media/v4l2-mediabus.h>
-#ifdef CONFIG_BUSFREQ_OPP
+#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
 #include <mach/dev.h>
 #endif
 #include <plat/media.h>
@@ -38,13 +41,13 @@
 #include <linux/pm_runtime.h>
 #endif
 
-#define CONFIG_MACH_STUTTGART 1
-
 #define FIMC_NAME		"s3c-fimc"
 #define FIMC_CMA_NAME		"fimc"
 
 #define FIMC_CORE_CLK		"sclk_fimc"
-#define FIMC_CLK_RATE		166750000
+
+extern int fimc_clk_rate(void);
+
 #define EXYNOS_BUSFREQ_NAME	"exynos-busfreq"
 
 #if defined(CONFIG_ARCH_EXYNOS4)
@@ -60,11 +63,16 @@
 #define FIMC_SUBDEVS		3
 #define FIMC_OUTBUFS		3
 #define FIMC_INQUEUES		10
+#if defined(CONFIG_SLP)
+#define FIMC_MAX_CTXS		8
+#else
 #define FIMC_MAX_CTXS		4
+#endif
 #define FIMC_TPID		3
 #define FIMC_CAPBUFS		32
 #define FIMC_ONESHOT_TIMEOUT	200
-#define FIMC_DQUEUE_TIMEOUT	HZ/10
+#define FIMC_DQUEUE_TIMEOUT	1000
+
 #define FIMC_FIFOOFF_CNT	1000000 /* Sufficiently big value for stop */
 
 #define FORMAT_FLAGS_PACKED	0x1
@@ -105,16 +113,6 @@
 
 #define L2_FLUSH_ALL	SZ_1M
 #define L1_FLUSH_ALL	SZ_64K
-
-//Lenovo extensions
-enum CAMERA_MODE{
-	CAMERA_PREVIEW = 0,
-	CAMERA_RECORD,
-	CAMERA_CAPTURE,
-	CAMERA_CAPTURE_INIT,
-       CAMERA_POSTVIEW =4,
-       CAMERA_STOPPREVIEW =5,
-};
 
 /*
  * ENUMERATIONS
@@ -216,12 +214,22 @@ enum cam_mclk_status {
 	CAM_MCLK_ON,
 };
 
+enum fimc_plane_num {
+	PLANE_1 = 0x1,
+	PLANE_2 = 0x2,
+	PLANE_3 = 0x3,
+	PLANE_4 = 0x4,
+};
+
 /*
  * STRUCTURES
 */
 
 /* for reserved memory */
 struct fimc_meminfo {
+#ifdef CONFIG_USE_FIMC_CMA
+	void		*cpu_addr;
+#endif
 	dma_addr_t	base;		/* buffer base */
 	size_t		size;		/* total length */
 	dma_addr_t	curr;		/* current addr */
@@ -247,39 +255,6 @@ struct fimc_overlay {
 };
 
 /* general buffer */
-#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628 -- add for sync exif informaiton.
-struct rational_t {
-	u32 num;
-	u32 den;
-};
-
-struct srational_t {
-	s32 num;
-	s32 den;
-};
-
-struct exif_attribute {
-	struct rational_t exposure_time;
-	struct srational_t shutter_speed;
-	u32 iso_speed_rating;
-	u32 flash;
-	struct srational_t brightness;
-};
-
-#define MAX_FACE_COUNT		16
-struct face_marker {
-	u32	frame_number;
-	//struct is_fd_rect face;
-	//struct is_fd_rect left_eye;
-	//struct is_fd_rect right_eye;
-	//struct is_fd_rect mouth;
-	u32	roll_angle;
-	u32	yaw_angle;
-	u32	confidence;
-	s32	smile_level;
-	s32	blink_level;
-};
-#endif
 struct fimc_buf_set {
 	int			id;
 	dma_addr_t		base[4];
@@ -289,13 +264,9 @@ struct fimc_buf_set {
 	enum videobuf_state	state;
 	u32			flags;
 	atomic_t		mapped_cnt;
+	dma_addr_t		paddr_pktdata;
+	u32			*vaddr_pktdata;
 	struct list_head	list;
-#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628-- add for sync exif informaiton.
-	struct exif_attribute	exif;
-	struct face_marker      face[MAX_FACE_COUNT];
-	u32 face_count;
-	u32 face_offset;
-#endif
 };
 
 /* for capture device */
@@ -311,12 +282,28 @@ struct fimc_capinfo {
 	/* using c210 */
 	struct list_head	outgoing_q;
 	int			nr_bufs;
+#ifdef CONFIG_SLP_DMABUF
+	int			nr_plane;
+#endif
 	int			irq;
 	int			lastirq;
+
+	bool			cacheable;
+	bool			pktdata_enable;
+	u32			pktdata_size;
+	u32			pktdata_plane;
+
+	u32			cnt;
+	u32			poll_cnt;
+
 	/* flip: V4L2_CID_xFLIP, rotate: 90, 180, 270 */
 	u32			flip;
 	u32			rotate;
-	bool			cacheable;
+	u32			dtp_mode;
+	u32			movie_mode;
+	u32			vt_mode;
+	u32			sensor_output_width;
+	u32			sensor_output_height;
 };
 
 /* for output overlay device */
@@ -361,6 +348,9 @@ struct fimc_ctx {
 	struct fimc_overlay	overlay;
 
 	u32			buf_num;
+#ifdef CONFIG_SLP_DMABUF
+	int			nr_plane;
+#endif
 	u32			is_requested;
 	struct fimc_buf_set	src[FIMC_OUTBUFS];
 	struct fimc_buf_set	dst[FIMC_OUTBUFS];
@@ -481,7 +471,7 @@ struct fimc_control {
 	spinlock_t			outq_lock;
 	wait_queue_head_t		wq;
 	struct device			*dev;
-#ifdef CONFIG_BUSFREQ_OPP
+#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
 	struct device			*bus_dev;
 #endif
 	int				irq;
@@ -508,8 +498,14 @@ struct fimc_control {
 	int 				suspend_framecnt;
 	enum fimc_sysmmu_flag		sysmmu_flag;
 	enum fimc_power_status		power_status;
+	struct timeval			curr_time;
+	struct timeval			before_time;
 	char 				cma_name[16];
 	bool				restart;
+#ifdef CONFIG_SLP_DMABUF
+	struct vb2_buffer       *out_bufs[VIDEO_MAX_FRAME];
+	struct vb2_buffer       *cap_bufs[VIDEO_MAX_FRAME];
+#endif
 };
 
 /* global */
@@ -520,6 +516,7 @@ struct fimc_global {
 	int 				active_camera;
 	int				initialized;
 	enum cam_mclk_status		mclk_status;
+	void __iomem				*backup_regs[4];
 };
 
 struct fimc_prv_data {
@@ -590,7 +587,13 @@ extern int s3cfb_direct_ioctl(int id, unsigned int cmd, unsigned long arg);
 extern int s3cfb_open_fifo(int id, int ch, int (*do_priv)(void *), void *param);
 extern int s3cfb_close_fifo(int id, int (*do_priv)(void *), void *param);
 #else /* Mainline FIMD */
+#ifdef CONFIG_DRM_EXYNOS_FIMD_WB
+extern int fimc_send_event(unsigned long val, void *v);
+static inline int s3cfb_direct_ioctl(int id, unsigned int cmd,
+unsigned long arg) { return fimc_send_event(cmd, (void *)arg); }
+#else
 static inline int s3cfb_direct_ioctl(int id, unsigned int cmd, unsigned long arg) { return 0; }
+#endif
 static inline int s3cfb_open_fifo(int id, int ch, int (*do_priv)(void *), void *param) { return 0; }
 static inline int s3cfb_close_fifo(int id, int (*do_priv)(void *), void *param) { return 0; }
 #endif
@@ -598,6 +601,8 @@ static inline int s3cfb_close_fifo(int id, int (*do_priv)(void *), void *param) 
 /* general */
 extern void s3c_csis_start(int csis_id, int lanes, int settle, int align, int width, int height, int pixel_format);
 extern void s3c_csis_stop(int csis_id);
+extern int s3c_csis_get_pkt(int csis_id, void *pktdata);
+extern void s3c_csis_enable_pktdata(int csis_id, bool enable);
 extern int fimc_dma_alloc(struct fimc_control *ctrl, struct fimc_buf_set *bs, int i, int align);
 extern void fimc_dma_free(struct fimc_control *ctrl, struct fimc_buf_set *bs, int i);
 extern u32 fimc_mapping_rot_flip(u32 rot, u32 flip);
@@ -646,6 +651,7 @@ extern int fimc_is_release_subdev(struct fimc_control *ctrl);
 extern int fimc_is_set_zoom(struct fimc_control *ctrl, struct v4l2_control *c);
 /* output device */
 extern void fimc_outdev_set_src_addr(struct fimc_control *ctrl, dma_addr_t *base);
+extern int fimc_output_set_dst_addr(struct fimc_control *ctrl, struct fimc_ctx *ctx, int idx);
 extern int fimc_outdev_set_ctx_param(struct fimc_control *ctrl, struct fimc_ctx *ctx);
 extern int fimc_start_fifo(struct fimc_control *ctrl, struct fimc_ctx *ctx);
 extern int fimc_fimd_rect(const struct fimc_control *ctrl, const struct fimc_ctx *ctx, struct v4l2_rect *fimd_rect);
@@ -677,6 +683,7 @@ extern void fimc_outdev_init_idxs(struct fimc_control *ctrl);
 
 extern void fimc_dump_context(struct fimc_control *ctrl, struct fimc_ctx *ctx);
 extern void fimc_print_signal(struct fimc_control *ctrl);
+extern void fimc_sfr_dump(struct fimc_control *ctrl);
 
 /* overlay device */
 extern int fimc_try_fmt_overlay(struct file *filp, void *fh, struct v4l2_format *f);
@@ -692,6 +699,7 @@ extern int fimc_hwset_enable_irq(struct fimc_control *ctrl, int overflow, int le
 extern int fimc_hwset_disable_irq(struct fimc_control *ctrl);
 extern int fimc_hwset_clear_irq(struct fimc_control *ctrl);
 extern int fimc_hwset_reset(struct fimc_control *ctrl);
+extern int fimc_hwset_sw_reset(struct fimc_control *ctrl);
 extern int fimc_hwget_frame_end(struct fimc_control *ctrl);
 extern int fimc_hwset_clksrc(struct fimc_control *ctrl, int src_clk);
 extern int fimc_hwget_overflow_state(struct fimc_control *ctrl);
@@ -751,6 +759,7 @@ extern int fimc_hw_wait_winoff(struct fimc_control *ctrl);
 extern int fimc_hw_wait_stop_input_dma(struct fimc_control *ctrl);
 extern int fimc_hwset_input_lineskip(struct fimc_control *ctrl);
 extern int fimc_hw_reset_camera(struct fimc_control *ctrl);
+extern void fimc_reset_status_reg(struct fimc_control *ctrl);
 void fimc_hwset_stop_processing(struct fimc_control *ctrl);
 extern int fimc_hw_reset_output_buf_sequence(struct fimc_control *ctrl);
 extern int fimc_hwset_output_buf_sequence(struct fimc_control *ctrl, u32 shift, u32 enable);
@@ -761,8 +770,6 @@ extern int fimc_hwget_present_frame_count(struct fimc_control *ctrl);
 extern int fimc_hwget_output_buf_sequence(struct fimc_control *ctrl);
 extern int fimc_hwget_check_framecount_sequence(struct fimc_control *ctrl, u32 frame);
 extern int fimc_hwset_image_effect(struct fimc_control *ctrl);
-extern int fimc_hwset_shadow_enable(struct fimc_control *ctrl);
-extern int fimc_hwset_shadow_disable(struct fimc_control *ctrl);
 extern int fimc_hwset_sysreg_camblk_fimd0_wb(struct fimc_control *ctrl);
 extern int fimc_hwset_sysreg_camblk_fimd1_wb(struct fimc_control *ctrl);
 extern int fimc_hwset_sysreg_camblk_isp_wb(struct fimc_control *ctrl);
@@ -788,5 +795,16 @@ static inline struct fimc_control *get_fimc_ctrl(int id)
 {
 	return &fimc_dev->ctrl[id];
 }
+#ifdef CONFIG_SLP_DMABUF
+extern void _fimc_queue_free(struct fimc_control *ctrl,
+		enum v4l2_buf_type type);
+extern int fimc_queue_alloc(struct fimc_control *ctrl, enum v4l2_buf_type type,
+		enum v4l2_memory memory, unsigned int num_buffers,
+		unsigned int num_planes);
+extern int _qbuf_dmabuf(struct fimc_control *ctrl, struct vb2_buffer *vb,
+		struct v4l2_buffer *b);
+extern int _dqbuf_dmabuf(struct fimc_control *ctrl, struct vb2_buffer *vb,
+		struct v4l2_buffer *b);
+#endif
 
 #endif /* __FIMC_H */

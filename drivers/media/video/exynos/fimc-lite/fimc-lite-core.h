@@ -15,6 +15,7 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/videodev2.h>
+#include <linux/videodev2_exynos_media.h>
 #include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
@@ -54,10 +55,11 @@
 
 #define FLITE_MAX_RESET_READY_TIME	20 /* 100ms */
 #define FLITE_MAX_CTRL_NUM		1
-#define FLITE_MAX_OUT_BUFS		1
+#define FLITE_MAX_OUT_BUFS (soc_is_exynos5250_rev1 ? flite->reqbufs_cnt	: 1)
 #ifdef CONFIG_ARCH_EXYNOS4
 #define FLITE_MAX_MBUS_NUM		1
 #endif
+
 enum flite_input_entity {
 	FLITE_INPUT_NONE,
 	FLITE_INPUT_SENSOR,
@@ -92,6 +94,8 @@ enum flite_state {
 #define flite_get_frame(flite, pad)\
 	((pad == FLITE_PAD_SINK) ? &flite->s_frame : &flite->d_frame)
 
+#define available_buf_cnt(dev) (soc_is_exynos5250_rev1 ? \
+				dev->active_buf_cnt : dev->pending_buf_cnt)
 struct flite_variant {
 	u16 max_w;
 	u16 max_h;
@@ -133,9 +137,9 @@ struct flite_addr {
 		o_width
 	---------------------
 	|    width(cropped) |
-	|    	----- 	    |
-	|offs_h |   | 	    |
-	|    	-----	    |
+	|	-----	    |
+	|offs_h |   |	    |
+	|	-----	    |
 	|		    |
 	---------------------
  */
@@ -228,7 +232,7 @@ struct flite_vb2 {
 
 	unsigned long (*plane_addr)(struct vb2_buffer *vb, u32 plane_no);
 
-	void (*resume)(void *alloc_ctx);
+	int (*resume)(void *alloc_ctx);
 	void (*suspend)(void *alloc_ctx);
 
 	int (*cache_flush)(struct vb2_buffer *vb, u32 num_planes);
@@ -248,6 +252,8 @@ void flite_hw_set_cam_channel(struct flite_dev *dev);
 void flite_hw_set_camera_type(struct flite_dev *dev, struct s3c_platform_camera *cam);
 int flite_hw_set_source_format(struct flite_dev *dev);
 void flite_hw_set_output_dma(struct flite_dev *dev, bool enable);
+void flite_hw_set_output_gscaler(struct flite_dev *dev, bool enable);
+void flite_hw_set_output_isp(struct flite_dev *dev, bool enable);
 void flite_hw_set_interrupt_source(struct flite_dev *dev, u32 source);
 void flite_hw_set_config_irq(struct flite_dev *dev, struct s3c_platform_camera *cam);
 void flite_hw_set_window_offset(struct flite_dev *dev);
@@ -260,6 +266,7 @@ void flite_hw_set_sensor_type(struct flite_dev *dev);
 void flite_hw_set_out_order(struct flite_dev *dev);
 void flite_hw_set_output_size(struct flite_dev *dev);
 void flite_hw_set_dma_offset(struct flite_dev *dev);
+void flite_hw_set_framecnt_seq_masking(struct flite_dev *dev, u32 buf_cnt);
 void flite_hw_set_output_addr(struct flite_dev *dev, struct flite_addr *addr,
 							int index);
 

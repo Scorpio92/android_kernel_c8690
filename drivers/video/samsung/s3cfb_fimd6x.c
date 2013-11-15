@@ -259,6 +259,31 @@ int s3cfb_set_polarity(struct s3cfb_global *ctrl)
 	return 0;
 }
 
+int s3cfb_set_polarity_only(struct s3cfb_global *ctrl)
+{
+	struct s3cfb_lcd_polarity *pol;
+	u32 cfg;
+
+	pol = &ctrl->lcd->polarity;
+    cfg = 0;
+
+	if (pol->rise_vclk)
+		cfg |= S3C_VIDCON1_IVCLK_RISING_EDGE;
+
+	if (pol->inv_hsync)
+		cfg |= S3C_VIDCON1_IHSYNC_INVERT;
+
+	if (pol->inv_vsync)
+		cfg |= S3C_VIDCON1_IVSYNC_INVERT;
+
+	if (pol->inv_vden)
+		cfg |= S3C_VIDCON1_IVDEN_INVERT;
+
+	writel(cfg, ctrl->regs + S3C_VIDCON1);
+
+	return 0;
+}
+
 int s3cfb_set_timing(struct s3cfb_global *ctrl)
 {
 	struct s3cfb_lcd_timing *time;

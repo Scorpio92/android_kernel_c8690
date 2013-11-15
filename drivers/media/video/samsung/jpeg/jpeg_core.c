@@ -65,10 +65,8 @@ int jpeg_set_enc_param(struct jpeg_control *ctrl)
 
 	jpeg_set_clk_power_on(ctrl->reg_base);
 	jpeg_set_mode(ctrl->reg_base, 0);
-	jpeg_huf_tbl_enable(ctrl->reg_base);
-	jpeg_set_enc_qtbl(ctrl->reg_base, ctrl->enc_param.quality);
-		
-
+	jpeg_set_enc_in_fmt(ctrl->reg_base, ctrl->enc_param.in_fmt);
+	jpeg_set_enc_out_fmt(ctrl->reg_base, ctrl->enc_param.out_fmt);
 	jpeg_set_enc_dri(ctrl->reg_base, 2);
 	jpeg_set_frame_size(ctrl->reg_base,
 		ctrl->enc_param.width, ctrl->enc_param.height);
@@ -77,10 +75,7 @@ int jpeg_set_enc_param(struct jpeg_control *ctrl)
 	jpeg_set_frame_buf(&ctrl->mem.frame_data_addr, ctrl->mem.base);
 	jpeg_set_frame_addr(ctrl->reg_base, ctrl->mem.frame_data_addr);
 	jpeg_set_enc_coef(ctrl->reg_base);
-	
-	jpeg_set_enc_in_fmt(ctrl->reg_base, ctrl->enc_param.in_fmt);
-	jpeg_set_enc_out_fmt(ctrl->reg_base, ctrl->enc_param.out_fmt);
-	
+	jpeg_set_enc_qtbl(ctrl->reg_base, ctrl->enc_param.quality);
 	jpeg_set_enc_htbl(ctrl->reg_base);
 
 	return 0;

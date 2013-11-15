@@ -33,7 +33,7 @@
 #include <linux/spinlock.h>
 
 #include <linux/videodev2.h>
-#include <linux/videodev2_samsung.h>
+#include <linux/videodev2_exynos_camera.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-mem2mem.h>
@@ -55,10 +55,7 @@
 /* Time - out definitions */
 #define FIMC_IS_SHUTDOWN_TIMEOUT	(3*HZ)
 #define FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR	(HZ)
-//#define FIMC_IS_SHUTDOWN_TIMEOUT_AF	(3*HZ)
-#define FIMC_IS_SHUTDOWN_TIMEOUT_AF	(10*HZ)
-
-
+#define FIMC_IS_SHUTDOWN_TIMEOUT_AF	(3*HZ)
 /* Memory definitions */
 #define FIMC_IS_MEM_FW			"f"
 #define FIMC_IS_MEM_ISP_BUF		"i"
@@ -66,42 +63,49 @@
 #define FIMC_IS_A5_MEM_SIZE		0x00A00000
 #define FIMC_IS_REGION_SIZE		0x5000
 
-#define FIMC_IS_DEBUG_REGION_ADDR	0x00840000
+#define FIMC_IS_DEBUG_REGION_ADDR	0x0084B000
 #define FIMC_IS_SHARED_REGION_ADDR	0x008C0000
 #define FIMC_IS_FW_INFO_LENGTH		32
 #define FIMC_IS_FW_VERSION_LENGTH	7
 #define FIMC_IS_SETFILE_INFO_LENGTH	39
 
-#define FIMC_IS_EXTRA_MEM_SIZE		(FIMC_IS_EXTRA_FW_SIZE +\
-					FIMC_IS_EXTRA_SETFILE_SIZE +\
-					0x1000)
+#define FIMC_IS_EXTRA_MEM_SIZE	(FIMC_IS_EXTRA_FW_SIZE +	\
+				 FIMC_IS_EXTRA_SETFILE_SIZE +	\
+				 0x1000)
 #define FIMC_IS_EXTRA_FW_SIZE		0x180000
 #define FIMC_IS_EXTRA_SETFILE_SIZE	0x4B000
 
 #define GED_FD_RANGE			1000
 
-#define BUS_LOCK_FREQ_L0	400200
-#define BUS_LOCK_FREQ_L1	267200
-#define BUS_LOCK_FREQ_L2	267160
-#define BUS_LOCK_FREQ_L3	160160
-#define BUS_LOCK_FREQ_L4	133133
-#define BUS_LOCK_FREQ_L5	100100
-
+#ifdef CONFIG_MACH_T0
+#define BUS_LOCK_FREQ_L0	440293
+#define BUS_LOCK_FREQ_L1	440220
+#define BUS_LOCK_FREQ_L2	293220
+#define BUS_LOCK_FREQ_L3	293176
+#define BUS_LOCK_FREQ_L4	176176
+#define BUS_LOCK_FREQ_L5	147147
+#define BUS_LOCK_FREQ_L6	110110
+#else
+#define BUS_LOCK_FREQ_L0	400266
+#define BUS_LOCK_FREQ_L1	400200
+#define BUS_LOCK_FREQ_L2	267200
+#define BUS_LOCK_FREQ_L3	267160
+#define BUS_LOCK_FREQ_L4	160160
+#define BUS_LOCK_FREQ_L5	133133
+#define BUS_LOCK_FREQ_L6	100100
+#endif
 /* A5 debug message setting */
 #define FIMC_IS_DEBUG_MSG	0x3F
 #define FIMC_IS_DEBUG_LEVEL	3
 
 #define SDCARD_FW
-//#define DEBUG
 
 #ifdef SDCARD_FW
-#define FIMC_IS_FW_SDCARD	        "/sdcard/fimc_is_fw.bin"
-#define FIMC_IS_SETFILE_SDCARD_6A3	"/sdcard/setfile.bin"
-#define FIMC_IS_SETFILE_SDCARD_3H7	"/sdcard/setfile_S5K3H7.bin"
+#define FIMC_IS_FW_SDCARD	"/sdcard/fimc_is_fw.bin"
+#define FIMC_IS_SETFILE_SDCARD	"/sdcard/setfile.bin"
 #endif
 #define FIMC_IS_FW		"fimc_is_fw.bin"
-#define FIMC_IS_SETFILE_6A3	"setfile.bin"
-#define FIMC_IS_SETFILE_3H7	"setfile_S5K3H7.bin"
+#define FIMC_IS_SETFILE		"setfile.bin"
 
 #define FIMC_IS_MSG_FILE	"/sdcard/fimc_is_msg_dump.txt"
 
@@ -110,7 +114,7 @@
 
 #ifdef DEBUG
 #define dbg(fmt, args...) \
-	printk(KERN_DEBUG "%s:%d: " fmt "\n", __func__, __LINE__, ##args)
+	printk(KERN_INFO "%s:%d: " fmt "\n", __func__, __LINE__, ##args)
 #else
 #define dbg(fmt, args...)
 #endif
@@ -134,10 +138,6 @@ Default setting values
 #define DEFAULT_PREVIEW_VIDEO_FRAMERATE	30
 #define DEFAULT_CAPTURE_VIDEO_FRAMERATE	30
 
-#if defined(M0)
-extern struct class *camera_class;
-#endif
-
 enum fimc_is_state_flag {
 	IS_ST_IDLE,
 	IS_ST_FW_LOADED,
@@ -150,7 +150,6 @@ enum fimc_is_state_flag {
 	IS_ST_CHANGE_MODE,
 	IS_ST_BLOCK_CMD_CLEARED,
 	IS_ST_SET_ZOOM,
-	IS_ST_FLASH_READY,
 	IS_ST_END
 };
 
@@ -205,13 +204,6 @@ enum af_state {
 enum af_lock_state {
 	FIMC_IS_AF_UNLOCKED	= 0,
 	FIMC_IS_AF_LOCKED	= 0x02
-};
-
-enum af_lost_state {
-	FIMC_IS_AF_UNKNOWN =0,
-	FIMC_IS_AF_SEARCH	= 2,
-	FIMC_IS_AF_INFOCUS	= 3,
-	FIMC_IS_AF_OUTOFFOCUS	= 4,	
 };
 
 enum ae_lock_state {
@@ -316,42 +308,13 @@ struct is_af_info {
 	u16 mode;
 	u32 af_state;
 	u32 af_lock_state;
-	u32 af_lost_state;
-	u32 af_lost_count;
 	u32 ae_lock_state;
 	u32 awb_lock_state;
 	u16 pos_x;
 	u16 pos_y;
-	u16 width; //##mmkim 0612 -- add for Inner window width
-	u16 height; //##mmkim 0612 -- add for Inner window height
 	u16 prev_pos_x;
 	u16 prev_pos_y;
 	u16 use_af;
-};
-
-struct is_flash_info {
-	u16 mode;
-	int led_on;
-	int intensity;
-};
-
-struct is_adjust_info {
-	u32 command;
-	u32 value;
-	u32 old_value;
-	u32 frame_start;
-	u32 frame_end;
-};
-
-struct is_adjust {
-	struct is_adjust_info contrast;
-	struct is_adjust_info saturation;
-	struct is_adjust_info sharpness;
-	struct is_adjust_info exposure;
-	struct is_adjust_info brightness;
-	struct is_adjust_info hue;
-	struct is_adjust_info hotpixel;
-	struct is_adjust_info shading;
 };
 
 struct fimc_is_dev;
@@ -363,7 +326,7 @@ struct fimc_is_vb2 {
 
 	unsigned long (*plane_addr)(struct vb2_buffer *vb, u32 plane_no);
 
-	void (*resume)(void *alloc_ctx);
+	int (*resume)(void *alloc_ctx);
 	void (*suspend)(void *alloc_ctx);
 
 	int (*cache_flush)(struct vb2_buffer *vb, u32 num_planes);
@@ -403,8 +366,7 @@ struct fimc_is_dev {
 	struct is_sensor		sensor;
 	u32				sensor_num;
 	struct is_af_info		af;
-	struct is_flash_info	flash;
-	struct is_adjust	adjust;
+
 	u16				num_clocks;
 	struct clk			*clock[NUM_FIMC_IS_CLOCKS];
 	void __iomem			*regs;
@@ -412,7 +374,6 @@ struct fimc_is_dev {
 
 	int				irq1;
 	wait_queue_head_t		irq_queue1;
-	wait_queue_head_t          aflost_queue;
 	struct is_to_host_cmd		i2h_cmd;
 	struct host_to_is_cmd		h2i_cmd;
 
@@ -436,15 +397,8 @@ struct fimc_is_dev {
 	atomic_t			p_region_num;
 	unsigned long			p_region_index1;
 	unsigned long			p_region_index2;
-	struct is_faceinfo_array *faceinfo_array;
 	struct is_region		*is_p_region;
 	struct is_share_region		*is_shared_region;
-	struct regulator 		*r_vdd18_cam;
-	struct regulator		*r_vddio18_cam;
-	struct regulator		*r_vdd28_af_cam;
-	struct regulator		*r_vadd28_cam;
-	struct regulator        *r_vdd18_mipi_tv;
-	struct regulator        *r_vdd10_mipi_tv;
 };
 
 static inline void fimc_is_state_lock_set(u32 state, struct fimc_is_dev *dev)

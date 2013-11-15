@@ -32,9 +32,11 @@ static int __init exynos4_asv_init(void)
 {
 	int ret = -EINVAL;
 
-	exynos_asv = kzalloc(sizeof(struct samsung_asv), GFP_KERNEL);
-	if (!exynos_asv)
-		goto out1;
+        exynos_asv = kzalloc(sizeof(struct samsung_asv), GFP_KERNEL);
+        if (!exynos_asv) {
+                ret = -ENOMEM;
+                goto out1;
+        }
 
 	if (soc_is_exynos4210())
 		ret = exynos4210_asv_init(exynos_asv);

@@ -13,7 +13,8 @@
 #include <linux/delay.h>
 #include <linux/gpio.h>
 #include <linux/videodev2.h>
-#include <linux/videodev2_samsung.h>
+#include <linux/videodev2_exynos_media.h>
+#include <linux/videodev2_exynos_camera.h>
 #include <linux/io.h>
 #include <mach/map.h>
 #include <plat/regs-fimc.h>
@@ -253,31 +254,13 @@ int fimc_hwset_image_effect(struct fimc_control *ctrl)
 	return 0;
 }
 
-int fimc_hwset_shadow_enable(struct fimc_control *ctrl)
-{
-	u32 cfg = readl(ctrl->regs + S3C_CIGCTRL);
-
-	cfg &= ~S3C_CIGCTRL_SHADOW_DISABLE;
-
-	writel(cfg, ctrl->regs + S3C_CIGCTRL);
-
-	return 0;
-}
-
-int fimc_hwset_shadow_disable(struct fimc_control *ctrl)
-{
-	u32 cfg = readl(ctrl->regs + S3C_CIGCTRL);
-
-	cfg |= S3C_CIGCTRL_SHADOW_DISABLE;
-
-	writel(cfg, ctrl->regs + S3C_CIGCTRL);
-
-	return 0;
-}
 static void fimc_reset_cfg(struct fimc_control *ctrl)
 {
 	int i;
 	u32 cfg[][2] = {
+#ifdef CONFIG_SLP
+		{ 0x008, 0x20010480 },
+#endif
 		{ 0x018, 0x00000000 }, { 0x01c, 0x00000000 },
 		{ 0x020, 0x00000000 }, { 0x024, 0x00000000 },
 		{ 0x028, 0x00000000 }, { 0x02c, 0x00000000 },
@@ -323,13 +306,48 @@ int fimc_hwset_reset(struct fimc_control *ctrl)
 	writel(cfg, ctrl->regs + S3C_CIGCTRL);
 
 	/* in case of ITU656, CISRCFMT[31] should be 0 */
-	if ((ctrl->cap != NULL) && (ctrl->cam->fmt == ITU_656_YCBCR422_8BIT)) {
-		cfg = readl(ctrl->regs + S3C_CISRCFMT);
-		cfg &= ~S3C_CISRCFMT_ITU601_8BIT;
-		writel(cfg, ctrl->regs + S3C_CISRCFMT);
+	if ((ctrl->cap != NULL) && (ctrl->cam != NULL)) {
+		if (ctrl->cam->fmt == ITU_656_YCBCR422_8BIT) {
+			cfg = readl(ctrl->regs + S3C_CISRCFMT);
+			cfg &= ~S3C_CISRCFMT_ITU601_8BIT;
+			writel(cfg, ctrl->regs + S3C_CISRCFMT);
+		}
 	}
 
 	fimc_reset_cfg(ctrl);
+
+	return 0;
+}
+
+int fimc_hwset_sw_reset(struct fimc_control *ctrl)
+{
+	u32 cfg = 0;
+	u32 status;
+	int i;
+
+	for (i = 0; i < 10; i++) {
+		cfg = readl(ctrl->regs + S3C_CISTATUS);
+		status = S3C_CISTATUS_GET_ENVID_STATUS(cfg);
+		if(status == 0)
+			break;
+		udelay(100);
+	}
+
+	if (i == 10)
+		fimc_err("%s: SWRST is called while Input DMA RUNNING\n", __func__);
+
+	cfg = readl(ctrl->regs + S3C_CISRCFMT);
+	cfg |= S3C_CISRCFMT_ITU601_8BIT;
+	writel(cfg, ctrl->regs + S3C_CISRCFMT);
+
+	/* s/w reset */
+	cfg = readl(ctrl->regs + S3C_CIGCTRL);
+	cfg |= (S3C_CIGCTRL_SWRST);
+	writel(cfg, ctrl->regs + S3C_CIGCTRL);
+
+	cfg = readl(ctrl->regs + S3C_CIGCTRL);
+	cfg &= ~S3C_CIGCTRL_SWRST;
+	writel(cfg, ctrl->regs + S3C_CIGCTRL);
 
 	return 0;
 }
@@ -498,7 +516,8 @@ int fimc43_hwset_camera_type(struct fimc_control *ctrl)
 		cfg |= S3C_CIGCTRL_SELCAM_MIPI_A;
 
 		/* FIXME: Temporary MIPI CSIS Data 32 bit aligned */
-		if (ctrl->cap->fmt.pixelformat == V4L2_PIX_FMT_JPEG)
+		if (ctrl->cap->fmt.pixelformat == V4L2_PIX_FMT_JPEG ||
+			ctrl->cap->fmt.pixelformat == V4L2_PIX_FMT_INTERLEAVED)
 			writel((MIPI_USER_DEF_PACKET_1 | (0x1 << 8)),
 					ctrl->regs + S3C_CSIIMGFMT);
 		else
@@ -552,7 +571,8 @@ int fimc51_hwset_camera_type(struct fimc_control *ctrl)
 			cfg |= S3C_CIGCTRL_SELCAM_MIPI_B;
 
 		/* FIXME: Temporary MIPI CSIS Data 32 bit aligned */
-		if (ctrl->cap->fmt.pixelformat == V4L2_PIX_FMT_JPEG)
+		if (ctrl->cap->fmt.pixelformat == V4L2_PIX_FMT_JPEG ||
+			ctrl->cap->fmt.pixelformat == V4L2_PIX_FMT_INTERLEAVED)
 			writel((MIPI_USER_DEF_PACKET_1 | (0x1 << 8)),
 					ctrl->regs + S3C_CSIIMGFMT);
 		else
@@ -650,6 +670,7 @@ int fimc_hwset_output_colorspace(struct fimc_control *ctrl, u32 pixelformat)
 
 	switch (pixelformat) {
 	case V4L2_PIX_FMT_JPEG:
+	case V4L2_PIX_FMT_INTERLEAVED:
 		break;
 	case V4L2_PIX_FMT_RGB565: /* fall through */
 	case V4L2_PIX_FMT_RGB32:
@@ -846,6 +867,12 @@ int fimc_hwset_output_yuv(struct fimc_control *ctrl, u32 pixelformat)
 	case V4L2_PIX_FMT_YUV420:
 	case V4L2_PIX_FMT_YVU420:
 		cfg |= S3C_CIOCTRL_YCBCR_3PLANE;
+		break;
+
+	/*  Set alpha value to 0xff */
+	case V4L2_PIX_FMT_RGB565:       /*  fall through */
+	case V4L2_PIX_FMT_RGB32:
+		cfg |= (0xff << 4);
 		break;
 	}
 
@@ -1229,7 +1256,11 @@ int fimc_hwset_disable_capture(struct fimc_control *ctrl)
 
 void fimc_wait_disable_capture(struct fimc_control *ctrl)
 {
+#ifdef CONFIG_VIDEO_S5K5BBGX
+	unsigned long timeo = jiffies + 60; /* more 40 ms */
+#else
 	unsigned long timeo = jiffies + 40; /* timeout of 200 ms */
+#endif
 	u32 cfg;
 	if (!ctrl || !ctrl->cap)
 		return;
@@ -1575,10 +1606,6 @@ int fimc50_hwset_output_offset(struct fimc_control *ctrl, u32 pixelformat,
 			       struct v4l2_rect *crop)
 {
 	u32 cfg_y = 0, cfg_cb = 0, cfg_cr = 0;
-
-	if (!crop->left && !crop->top && (bounds->width == crop->width) &&
-		(bounds->height == crop->height))
-		return -EINVAL;
 
 	fimc_dbg("%s: left: %d, top: %d, width: %d, height: %d\n",
 		__func__, crop->left, crop->top, crop->width, crop->height);
@@ -2080,3 +2107,20 @@ void fimc_reset_status_reg(struct fimc_control *ctrl)
 {
 	writel(0x0, ctrl->regs + S3C_CISTATUS);
 }
+
+#if defined (CONFIG_ARCH_EXYNOS4)
+void fimc_sfr_dump(struct fimc_control *ctrl)
+{
+	int i;
+	u32 cfg[] = {0x0, 0x4, 0x8, 0x14, 0x18, 0x1C, 0x20, 0x24, 0x28, 0x2c, 0x30,
+				0x34, 0x38, 0x3c, 0x40, 0x44, 0x48, 0x4c, 0x50, 0x54, 0x58, 0x5c,
+				0x60, 0x64, 0x68, 0xc0, 0xc4, 0xc8, 0xd0, 0xd4, 0xd8, 0xdc, 0xec,
+				0xf0, 0xf4, 0xf8, 0xfc, 0x144, 0x148, 0x14c, 0x168, 0x16c, 0x170,
+				0x174, 0x178, 0x180, 0x184,0x188, 0x18c, 0x194, 0x19c, 0x1a0, 0x1fc,};
+
+	for (i = 0; i < sizeof(cfg) / 4; i++) {
+		printk("idx = 0x%x \tval 0x%08x \n", cfg[i], readl(ctrl->regs + cfg[i]));
+	}
+
+}
+#endif

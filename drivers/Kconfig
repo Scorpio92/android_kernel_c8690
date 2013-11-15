@@ -130,4 +130,7 @@ source "drivers/clocksource/Kconfig"
 
 source "drivers/smm6260_phone/Kconfig"
 
+# Authentec
+source "drivers/interceptor/Kconfig"
+
 endmenu

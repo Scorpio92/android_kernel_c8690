@@ -41,6 +41,10 @@ struct mfc_enc_ctx {
 
 	/* init | exec */
 	unsigned int framemap;
+	unsigned int inputformat;
+#if SUPPORT_SLICE_ENCODING
+	unsigned int outputmode;
+#endif
 
 	/* exec */
 	unsigned int interlace;
@@ -55,7 +59,10 @@ struct mfc_enc_ctx {
 	unsigned int frame_skip_enable;
 	unsigned int vui_info_enable;
 	unsigned int hier_p_enable;
-
+#if SUPPORT_SLICE_ENCODING
+	unsigned int slicecount;
+	unsigned int slicesize;
+#endif
 	/* change flag */
 	unsigned int setflag;
 	unsigned int FrameTypeCngTag;
@@ -80,6 +87,7 @@ struct mfc_enc_h264 {
 
 	unsigned int sei_gen;		/* H */
 	struct mfc_frame_packing fp;	/* H */
+	unsigned int sps_pps_gen;
 };
 
 int mfc_init_encoding(struct mfc_inst_ctx *ctx, union mfc_args *args);

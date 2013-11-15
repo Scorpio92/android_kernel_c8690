@@ -53,10 +53,7 @@ enum is_cmd {
 	/* PARAM1 : frame start number */
 	/* PARAM2 : frame count */
 	IHC_AA_DONE,
-	IHC_NOT_READY,
-	IHC_FLASH_READY,
-	IHC_ISP_ADJUST_DONE,    		//for HDR
-	IHC_ISP_ISO_DONE    			//for HDR    
+	IHC_NOT_READY
 };
 
 enum is_reply {

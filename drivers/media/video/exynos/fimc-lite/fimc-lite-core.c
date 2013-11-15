@@ -248,8 +248,10 @@ static int flite_s_stream(struct v4l2_subdev *sd, int enable)
 
 	spin_lock_irqsave(&flite->slock, flags);
 
+#if defined(CONFIG_MEDIA_CONTROLLER) && defined(CONFIG_ARCH_EXYNOS5)
 	if (test_bit(FLITE_ST_SUSPEND, &flite->state))
 		goto s_stream_unlock;
+#endif
 
 	if (enable) {
 		flite_hw_set_cam_channel(flite);
@@ -265,6 +267,10 @@ static int flite_s_stream(struct v4l2_subdev *sd, int enable)
 			}
 			if (cam->use_isp)
 				flite_hw_set_output_dma(flite, false);
+
+			if (soc_is_exynos5250_rev1)
+				flite_hw_set_output_gscaler(flite, true);
+
 			int_src = FLITE_REG_CIGCTRL_IRQ_OVFEN0_ENABLE |
 				FLITE_REG_CIGCTRL_IRQ_LASTEN0_ENABLE |
 				FLITE_REG_CIGCTRL_IRQ_ENDEN0_DISABLE |
@@ -296,13 +302,17 @@ static int flite_s_stream(struct v4l2_subdev *sd, int enable)
 		if (test_bit(FLITE_ST_STREAM, &flite->state)) {
 			flite_hw_set_capture_stop(flite);
 			spin_unlock_irqrestore(&flite->slock, flags);
+#if defined(CONFIG_ARCH_EXYNOS4)
+			clear_bit(FLITE_ST_STREAM, &flite->state);
+#else
 			ret = wait_event_timeout(flite->irq_queue,
 			!test_bit(FLITE_ST_STREAM, &flite->state), HZ/20); /* 50 ms */
 			if (unlikely(!ret)) {
 				v4l2_err(sd, "wait timeout\n");
 				ret = -EBUSY;
 			}
-			return ret;
+#endif
+		return ret;
 		} else {
 			goto s_stream_unlock;
 		}
@@ -319,6 +329,7 @@ static irqreturn_t flite_irq_handler(int irq, void *priv)
 	struct flite_buffer *buf;
 #endif
 	u32 int_src = 0;
+	printk(KERN_INFO "flite interrupt\n");
 
 	flite_hw_get_int_src(flite, &int_src);
 	flite_hw_clear_irq(flite);
@@ -350,7 +361,8 @@ static irqreturn_t flite_irq_handler(int irq, void *priv)
 			buf = active_queue_pop(flite);
 			if (!test_bit(FLITE_ST_RUN, &flite->state)) {
 				flite_info("error interrupt");
-				vb2_buffer_done(&buf->vb, VB2_BUF_STATE_ERROR);
+				vb2_buffer_done(&buf->vb,
+						VB2_BUF_STATE_ERROR);
 				goto unlock;
 			}
 			vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
@@ -378,11 +390,15 @@ static int flite_s_power(struct v4l2_subdev *sd, int on)
 	int ret = 0;
 
 	if (on) {
-		pm_runtime_get_sync(&flite->pdev->dev);
-		set_bit(FLITE_ST_POWER, &flite->state);
+		if (!test_bit(FLITE_ST_POWER, &flite->state)) {
+			pm_runtime_get_sync(&flite->pdev->dev);
+			set_bit(FLITE_ST_POWER, &flite->state);
+		}
 	} else {
-		pm_runtime_put_sync(&flite->pdev->dev);
-		clear_bit(FLITE_ST_POWER, &flite->state);
+		if (test_bit(FLITE_ST_POWER, &flite->state)) {
+			pm_runtime_put_sync(&flite->pdev->dev);
+			clear_bit(FLITE_ST_POWER, &flite->state);
+		}
 	}
 
 	return ret;
@@ -611,10 +627,10 @@ static int flite_link_setup(struct media_entity *entity,
 	struct v4l2_subdev *sd = media_entity_to_v4l2_subdev(entity);
 	struct flite_dev *flite = v4l2_get_subdevdata(sd);
 
-	flite_info("");
 	switch (local->index | media_entity_type(remote->entity)) {
 	case FLITE_PAD_SINK | MEDIA_ENT_T_V4L2_SUBDEV:
 		if (flags & MEDIA_LNK_FL_ENABLED) {
+			flite_info("sink link enabled");
 			if (flite->input != FLITE_INPUT_NONE) {
 				flite_err("link is busy");
 				return -EBUSY;
@@ -624,22 +640,29 @@ static int flite_link_setup(struct media_entity *entity,
 			else
 				flite->input = FLITE_INPUT_SENSOR;
 		} else {
+			flite_info("sink link disabled");
 			flite->input = FLITE_INPUT_NONE;
 		}
 		break;
 
 	case FLITE_PAD_SOURCE_PREV | MEDIA_ENT_T_V4L2_SUBDEV: /* fall through */
 	case FLITE_PAD_SOURCE_CAMCORD | MEDIA_ENT_T_V4L2_SUBDEV:
-		if (flags & MEDIA_LNK_FL_ENABLED)
+		if (flags & MEDIA_LNK_FL_ENABLED) {
+			flite_info("source link enabled");
 			flite->output |= FLITE_OUTPUT_GSC;
-		else
+		} else {
+			flite_info("source link disabled");
 			flite->output &= ~FLITE_OUTPUT_GSC;
+		}
 		break;
 	case FLITE_PAD_SOURCE_MEM | MEDIA_ENT_T_DEVNODE:
-		if (flags & MEDIA_LNK_FL_ENABLED)
+		if (flags & MEDIA_LNK_FL_ENABLED) {
+			flite_info("source link enabled");
 			flite->output |= FLITE_OUTPUT_MEM;
-		else
+		} else {
+			flite_info("source link disabled");
 			flite->output &= ~FLITE_OUTPUT_MEM;
+		}
 		break;
 	default:
 		flite_err("ERR link");
@@ -891,6 +914,10 @@ int __flite_pipeline_shutdown(struct flite_dev *flite)
 	if (ret && ret != -ENXIO)
 		flite_set_cam_clock(flite, false);
 
+	flite->pipeline.flite = NULL;
+	flite->pipeline.csis = NULL;
+	flite->pipeline.sensor = NULL;
+
 	return ret == -ENXIO ? 0 : ret;
 }
 
@@ -994,6 +1021,11 @@ static int flite_start_streaming(struct vb2_queue *q)
 	struct flite_dev *flite = q->drv_priv;
 
 	flite_hw_reset(flite);
+	if (soc_is_exynos5250_rev1) {
+		flite_info("");
+		flite_hw_set_framecnt_seq_masking(flite, flite->reqbufs_cnt);
+	}
+
 	flite->active_buf_cnt = 0;
 	flite->pending_buf_cnt = 0;
 
@@ -1136,7 +1168,7 @@ static void flite_buf_queue(struct vb2_buffer *vb)
 	}
 
 	if (vb2_is_streaming(&flite->vbq) &&
-		(flite->pending_buf_cnt >= min_bufs) &&
+		(available_buf_cnt(flite) >= min_bufs) &&
 		!test_bit(FLITE_ST_STREAM, &flite->state)) {
 		if (!test_and_set_bit(FLITE_ST_PIPE_STREAM, &flite->state)) {
 			spin_unlock_irqrestore(&flite->slock, flags);
@@ -1849,12 +1881,19 @@ static int flite_suspend(struct device *dev)
 	struct v4l2_subdev *sd = platform_get_drvdata(pdev);
 	struct flite_dev *flite = v4l2_get_subdevdata(sd);
 
-	if (test_bit(FLITE_ST_STREAM, &flite->state))
+	printk(KERN_INFO "%s\n", __func__);
+
+	if (test_bit(FLITE_ST_STREAM, &flite->state)) {
+		printk(KERN_INFO "%s flite_s_stream\n", __func__);
 		flite_s_stream(sd, false);
-	if (test_bit(FLITE_ST_POWER, &flite->state))
+	}
+	if (test_bit(FLITE_ST_POWER, &flite->state)) {
+		printk(KERN_INFO "%s flite_s_power\n", __func__);
 		flite_s_power(sd, false);
+	}
 
 	set_bit(FLITE_ST_SUSPEND, &flite->state);
+	printk(KERN_INFO "%s--\n", __func__);
 
 	return 0;
 }
@@ -1865,12 +1904,20 @@ static int flite_resume(struct device *dev)
 	struct v4l2_subdev *sd = platform_get_drvdata(pdev);
 	struct flite_dev *flite = v4l2_get_subdevdata(sd);
 
-	if (test_bit(FLITE_ST_POWER, &flite->state))
+	printk(KERN_INFO "%s\n", __func__);
+	if (test_bit(FLITE_ST_POWER, &flite->state)) {
+		printk(KERN_INFO "%s flite_s_power\n", __func__);
 		flite_s_power(sd, true);
-	if (test_bit(FLITE_ST_STREAM, &flite->state))
-		flite_s_stream(sd, true);
+	}
 
 	clear_bit(FLITE_ST_SUSPEND, &flite->state);
+
+	if (test_bit(FLITE_ST_STREAM, &flite->state)) {
+		printk(KERN_INFO "%s flite_s_stream\n", __func__);
+		flite_s_stream(sd, true);
+	}
+
+	printk(KERN_INFO "%s--\n", __func__);
 
 	return 0;
 }
@@ -1882,6 +1929,7 @@ static int flite_runtime_suspend(struct device *dev)
 	struct flite_dev *flite = v4l2_get_subdevdata(sd);
 	unsigned long flags;
 
+	printk(KERN_INFO "%s\n", __func__);
 #if defined(CONFIG_MEDIA_CONTROLLER) && defined(CONFIG_ARCH_EXYNOS5)
 	flite->vb2->suspend(flite->alloc_ctx);
 	clk_disable(flite->camif_clk);
@@ -1889,6 +1937,7 @@ static int flite_runtime_suspend(struct device *dev)
 	spin_lock_irqsave(&flite->slock, flags);
 	set_bit(FLITE_ST_SUSPEND, &flite->state);
 	spin_unlock_irqrestore(&flite->slock, flags);
+	printk(KERN_INFO "%s--\n", __func__);
 
 	return 0;
 }
@@ -1900,6 +1949,7 @@ static int flite_runtime_resume(struct device *dev)
 	struct flite_dev *flite = v4l2_get_subdevdata(sd);
 	unsigned long flags;
 
+	printk(KERN_INFO "%s\n", __func__);
 #if defined(CONFIG_MEDIA_CONTROLLER) && defined(CONFIG_ARCH_EXYNOS5)
 	clk_enable(flite->camif_clk);
 	flite->vb2->resume(flite->alloc_ctx);
@@ -1908,6 +1958,7 @@ static int flite_runtime_resume(struct device *dev)
 	clear_bit(FLITE_ST_SUSPEND, &flite->state);
 	spin_unlock_irqrestore(&flite->slock, flags);
 
+	printk(KERN_INFO "%s--\n", __func__);
 	return 0;
 }
 
@@ -1970,7 +2021,7 @@ static int flite_probe(struct platform_device *pdev)
 				      pdev->name);
 	if (!regs_res) {
 		dev_err(&pdev->dev, "Failed to request io memory region\n");
-		goto err_resource;
+		goto err_flite;
 	}
 
 	flite->regs_res = regs_res;
@@ -1993,8 +2044,10 @@ static int flite_probe(struct platform_device *pdev)
 	}
 
 	sd = kzalloc(sizeof(*sd), GFP_KERNEL);
-	if (!sd)
-	       goto err_irq;
+	if (!sd) {
+		ret = -ENOMEM;
+		goto err_irq;
+	}
 	v4l2_subdev_init(sd, &flite_subdev_ops);
 	snprintf(sd->name, sizeof(sd->name), "flite-subdev.%d", flite->id);
 
@@ -2011,13 +2064,13 @@ static int flite_probe(struct platform_device *pdev)
 	mutex_init(&flite->lock);
 	flite->mdev = flite_get_capture_md(MDEV_CAPTURE);
 	if (IS_ERR_OR_NULL(flite->mdev))
-		goto err_irq;
+		goto err_device_register;
 
 	flite_dbg("mdev = 0x%08x", (u32)flite->mdev);
 
 	ret = flite_register_video_device(flite);
 	if (ret)
-		goto err_irq;
+		goto err_device_register;
 
 	/* Get mipi-csis subdev ptr using mdev */
 	flite->sd_csis = flite->mdev->csis_sd[flite->id];
@@ -2079,6 +2132,8 @@ err_vfd_alloc:
 	media_entity_cleanup(&flite->vfd->entity);
 	video_device_release(flite->vfd);
 #endif
+err_device_register:
+	kfree(sd);
 err_irq:
 	free_irq(flite->irq, flite);
 err_reg_unmap:
@@ -2086,8 +2141,8 @@ err_reg_unmap:
 err_reg_region:
 	release_mem_region(regs_res->start, resource_size(regs_res));
 err_resource:
-	release_resource(flite->regs_res);
-	kfree(flite->regs_res);
+	release_resource(regs_res);
+	kfree(regs_res);
 err_flite:
 	kfree(flite);
 	return ret;

@@ -6,6 +6,15 @@ config VIDEO_FIMC
 	help
 	  This is a video4linux driver for Samsung FIMC device.
 
+config USE_FIMC_CMA
+	bool "Use CMA for FIMC0/1 region (EXPERIMENTAL)"
+	depends on DMA_CMA
+	default n
+	help
+	  This enables the Contiguous Memory Allocator for MFC SECURE region.
+
+	  If unsure, say "n".
+
 choice
 depends on VIDEO_FIMC
 prompt "Select CSC Range config"
@@ -34,6 +43,11 @@ config VIDEO_FIMC_MIPI
 	bool "MIPI-CSI2 Slave Interface support"
 	depends on VIDEO_FIMC && (ARCH_S5PV210 || ARCH_EXYNOS4)
 	default y
+
+config VIDEO_FIMC_MIPI_IRQ_DEBUG
+	bool "FIMC MIPI Error interrupt message"
+	depends on VIDEO_FIMC_MIPI
+	default n
 
 choice
 depends on VIDEO_FIMC

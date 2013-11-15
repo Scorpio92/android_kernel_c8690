@@ -15,7 +15,9 @@
 #include <media/v4l2-common.h>
 #include <media/v4l2-ioctl.h>
 
-#include <linux/videodev2_samsung.h>
+#include <linux/videodev2_exynos_camera.h>
+#include <linux/io.h>
+#include <asm/cacheflush.h>
 
 #include "s5p_tvout_common_lib.h"
 #include "s5p_tvout_ctrl.h"
@@ -44,9 +46,11 @@ extern void *s5p_getaddress(unsigned int cookie);
 #endif
 #endif
 
+extern struct s5p_tvout_vp_bufferinfo s5ptv_vp_buff;
+
 #define V4L2_STD_ALL_HD				((v4l2_std_id)0xffffffff)
 
-#if defined(CONFIG_CPU_EXYNOS4210) || defined(CONFIG_TC4_GB) //added yqf, GB/ICS differ on TC4
+#ifdef CONFIG_CPU_EXYNOS4210
 #define S5P_TVOUT_TVIF_MINOR			14
 #define S5P_TVOUT_VO_MINOR			21
 #else
@@ -89,12 +93,9 @@ extern void *s5p_getaddress(unsigned int cookie);
 #define V4L2_STD_TVOUT_1080P_23_TB	((v4l2_std_id)0x17000000)
 #endif
 
-
-
 #define CVBS_S_VIDEO (V4L2_STD_NTSC_M | V4L2_STD_NTSC_M_JP| \
 	V4L2_STD_PAL | V4L2_STD_PAL_M | V4L2_STD_PAL_N | V4L2_STD_PAL_Nc | \
 	V4L2_STD_PAL_60 | V4L2_STD_NTSC_443)
-
 
 struct v4l2_vid_overlay_src {
 	void			*base_y;
@@ -368,7 +369,7 @@ static int s5p_tvout_tvif_s_std(
 	int i;
 	v4l2_std_id std_id = *norm;
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_lock();
 #endif
 	for (i = 0; i < S5P_TVOUT_TVIF_NO_OF_STANDARD; i++) {
@@ -379,6 +380,9 @@ static int s5p_tvout_tvif_s_std(
 	if (i == S5P_TVOUT_TVIF_NO_OF_STANDARD) {
 		tvout_err("There is no TV standard(0x%08Lx)\n", std_id);
 
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
+		s5p_tvout_mutex_unlock();
+#endif
 		return -EINVAL;
 	}
 
@@ -387,7 +391,7 @@ static int s5p_tvout_tvif_s_std(
 	tvout_dbg("standard id=0x%X, name=\"%s\"\n",
 			(u32) std_id, s5p_tvout_tvif_standard[i].name);
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_unlock();
 #endif
 
@@ -434,7 +438,7 @@ static int s5p_tvout_tvif_s_output(
 		return -EINVAL;
 	}
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND)
 	s5p_tvout_mutex_lock();
 #endif
 	on_start_process = true;
@@ -444,11 +448,10 @@ static int s5p_tvout_tvif_s_output(
 			(int) i, s5p_tvout_tvif_output[i].name);
 
 	switch (s5p_tvout_tvif_output[i].type) {
-#ifdef CONFIG_ANALOG_TVENC
 	case V4L2_OUTPUT_TYPE_COMPOSITE:
 		tv_if =	TVOUT_COMPOSITE;
 		break;
-#endif
+
 	case V4L2_OUTPUT_TYPE_HDMI:
 		tv_if =	TVOUT_HDMI;
 		break;
@@ -572,7 +575,6 @@ static int s5p_tvout_tvif_s_output(
 		tv_std = TVOUT_1080P_23_TB;
 		break;
 #endif
-
 	default:
 		tvout_err("Invalid standard id(0x%08Lx)\n",
 			s5p_tvout_v4l2_private.tvif_standard_id);
@@ -581,12 +583,12 @@ static int s5p_tvout_tvif_s_output(
 
 	s5p_tvif_ctrl_start(tv_std, tv_if);
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND)
 	s5p_tvout_mutex_unlock();
 #endif
 	return 0;
 error_on_tvif_s_output:
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND)
 	s5p_tvout_mutex_unlock();
 #endif
 	return -1;
@@ -711,6 +713,13 @@ static int s5p_tvout_tvif_cropcap(
 	return 0;
 }
 
+static int s5p_tvout_tvif_wait_for_vsync(void)
+{
+	sleep_on_timeout(&s5ptv_wq, HZ / 10);
+
+	return 0;
+}
+
 const struct v4l2_ioctl_ops s5p_tvout_tvif_ioctl_ops = {
 	.vidioc_querycap	= s5p_tvout_tvif_querycap,
 	.vidioc_g_std		= s5p_tvout_tvif_g_std,
@@ -721,19 +730,27 @@ const struct v4l2_ioctl_ops s5p_tvout_tvif_ioctl_ops = {
 	.vidioc_cropcap		= s5p_tvout_tvif_cropcap,
 };
 
-#define VIDIOC_HDCP_ENABLE	_IOWR('V', 100, unsigned int)
-#define VIDIOC_HDCP_STATUS	_IOR('V', 101, unsigned int)
-#define VIDIOC_HDCP_PROT_STATUS	_IOR('V', 102, unsigned int)
-#define VIDIOC_INIT_AUDIO	_IOR('V', 103, unsigned int)
-#define VIDIOC_AV_MUTE		_IOR('V', 104, unsigned int)
-#define VIDIOC_G_AVMUTE		_IOR('V', 105, unsigned int)
-#define VIDIOC_S_AUDIO_CHANNEL	_IOR('V', 106, unsigned int)
+#define VIDIOC_HDCP_ENABLE		_IOWR('V', 100, unsigned int)
+#define VIDIOC_HDCP_STATUS		_IOR('V', 101, unsigned int)
+#define VIDIOC_HDCP_PROT_STATUS		_IOR('V', 102, unsigned int)
+#define VIDIOC_INIT_AUDIO		_IOR('V', 103, unsigned int)
+#define VIDIOC_AV_MUTE			_IOR('V', 104, unsigned int)
+#define VIDIOC_G_AVMUTE			_IOR('V', 105, unsigned int)
+#define VIDIOC_SET_VSYNC_INT		_IOR('V', 106, unsigned int)
+#define VIDIOC_WAITFORVSYNC		_IOR('V', 107, unsigned int)
+#define VIDIOC_G_VP_BUFF_INFO		_IOR('V', 108, unsigned int)
+#define VIDIOC_S_VP_BUFF_INFO		_IOR('V', 109, unsigned int)
+#define VIDIOC_S_AUDIO_CHANNEL		_IOR('V', 110, unsigned int)
+#define VIDIOC_S_Q_COLOR_RANGE		_IOR('V', 111, unsigned int)
 
 long s5p_tvout_tvif_ioctl(
 		struct file *file, unsigned int cmd, unsigned long arg)
 {
-	int ret = 0;
-#ifdef CONFIG_HAS_EARLYSUSPEND
+	long ret = 0;
+	void *argp = (void *) arg;
+	int i = 0;
+
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_lock();
 #endif
 
@@ -741,14 +758,14 @@ long s5p_tvout_tvif_ioctl(
 
 	switch (cmd) {
 	case VIDIOC_INIT_AUDIO:
-/*		s5ptv_status.hdmi.audio = (unsigned int) arg; */
-		if (arg)
-			ret = s5p_tvif_ctrl_set_audio(true);
-		else
-			ret = s5p_tvif_ctrl_set_audio(false);
+		tvout_dbg("VIDIOC_INIT_AUDIO(%d)\n", (int) arg);
 
-		tvout_dbg("VIDIOC_INIT_AUDIO(%d), Ret : %d\n", (int) arg,
-		ret);
+/*		s5ptv_status.hdmi.audio = (unsigned int) arg; */
+
+		if (arg)
+			s5p_tvif_ctrl_set_audio(true);
+		else
+			s5p_tvif_ctrl_set_audio(false);
 
 		goto end_tvif_ioctl;
 
@@ -807,6 +824,73 @@ long s5p_tvout_tvif_ioctl(
 		goto end_tvif_ioctl;
 	}
 
+	case VIDIOC_SET_VSYNC_INT:
+		s5p_mixer_ctrl_set_vsync_interrupt((int)argp);
+		goto end_tvif_ioctl;
+
+	case VIDIOC_WAITFORVSYNC:
+		s5p_tvout_tvif_wait_for_vsync();
+		goto end_tvif_ioctl;
+
+	case VIDIOC_G_VP_BUFF_INFO: {
+		struct s5ptv_vp_buf_info __user *buff_info =
+			(struct s5ptv_vp_buf_info __user *)arg;
+		struct s5p_tvout_vp_buff __user *buffs;
+		unsigned int tmp = S5PTV_VP_BUFF_CNT;
+		ret = copy_to_user(&buff_info->buff_cnt, &tmp, sizeof(tmp));
+		if (WARN_ON(ret))
+			goto end_tvif_ioctl;
+		ret = copy_from_user(&buffs, &buff_info->buffs,
+				     sizeof(struct s5p_tvout_vp_buff *));
+		if (WARN_ON(ret))
+			goto end_tvif_ioctl;
+		for (i = 0; i < S5PTV_VP_BUFF_CNT; i++) {
+			ret = copy_to_user(&buffs[i].phy_base,
+					   &s5ptv_vp_buff.vp_buffs[i].phy_base,
+					   sizeof(unsigned int));
+			if (WARN_ON(ret))
+				goto end_tvif_ioctl;
+			ret = copy_to_user(&buffs[i].vir_base,
+					   &s5ptv_vp_buff.vp_buffs[i].vir_base,
+					   sizeof(unsigned int));
+			if (WARN_ON(ret))
+				goto end_tvif_ioctl;
+			tmp = S5PTV_VP_BUFF_SIZE;
+			ret = copy_to_user(&buffs[i].size, &tmp, sizeof(tmp));
+			if (WARN_ON(ret))
+				goto end_tvif_ioctl;
+		}
+		goto end_tvif_ioctl;
+	}
+	case VIDIOC_S_VP_BUFF_INFO: {
+		struct s5ptv_vp_buf_info buff_info;
+		struct s5p_tvout_vp_buff buffs[S5PTV_VP_BUFF_CNT];
+		ret = copy_from_user(&buff_info,
+				     (struct s5ptv_vp_buf_info __user *)arg,
+				     sizeof(buff_info));
+		if (WARN_ON(ret))
+			goto end_tvif_ioctl;
+		ret = copy_from_user(buffs, buff_info.buffs, sizeof(buffs));
+		if (WARN_ON(ret))
+			goto end_tvif_ioctl;
+
+		if (buff_info.buff_cnt != S5PTV_VP_BUFF_CNT) {
+			tvout_err("Insufficient buffer count (%d, %d)",
+				  buff_info.buff_cnt, S5PTV_VP_BUFF_CNT);
+			ret = -EINVAL;
+			goto end_tvif_ioctl;
+		}
+		for (i = 0; i < S5PTV_VP_BUFF_CNT; i++) {
+			s5ptv_vp_buff.vp_buffs[i].phy_base = buffs[i].phy_base;
+			s5ptv_vp_buff.vp_buffs[i].vir_base =
+				(unsigned int)phys_to_virt(buffs[i].phy_base);
+			s5ptv_vp_buff.vp_buffs[i].size = buffs[i].size;
+			tvout_dbg("s5ptv_vp_buff phy_base = 0x%x, vir_base = 0x%8x\n",
+				  s5ptv_vp_buff.vp_buffs[i].phy_base,
+				  s5ptv_vp_buff.vp_buffs[i].vir_base);
+		}
+		goto end_tvif_ioctl;
+	}
 	case VIDIOC_S_AUDIO_CHANNEL: {
 		if (!arg)
 			s5p_tvif_audio_channel(TVOUT_AUDIO_2CH_VAL);
@@ -819,17 +903,27 @@ long s5p_tvout_tvif_ioctl(
 		break;
 	}
 
+	case VIDIOC_S_Q_COLOR_RANGE: {
+		if ((int)arg != 0 && (int)arg != 1) {
+			printk(KERN_ERR "Quantaization range has wrong value!\n");
+			goto end_tvif_ioctl;
+		}
+
+		s5p_tvif_q_color_range((int)arg);
+		break;
+	}
+
 	default:
 		break;
 	}
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_unlock();
 #endif
 	return video_ioctl2(file, cmd, arg);
 
 end_tvif_ioctl:
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_unlock();
 #endif
 	return ret;
@@ -860,8 +954,11 @@ static int s5p_tvout_tvif_release(struct file *file)
 	tvout_dbg("on_stop_process(%d)\n", on_stop_process);
 	atomic_dec(&s5p_tvout_v4l2_private.tvif_use);
 
-	if (atomic_read(&s5p_tvout_v4l2_private.tvif_use) == 0)
+	if (atomic_read(&s5p_tvout_v4l2_private.tvif_use) == 0) {
+		s5p_tvout_mutex_lock();
 		s5p_tvif_ctrl_stop();
+		s5p_tvout_mutex_unlock();
+	}
 
 	on_stop_process = false;
 	tvout_dbg("on_stop_process(%d)\n", on_stop_process);
@@ -922,6 +1019,11 @@ static int s5p_tvout_vo_s_fmt_type_private(
 	struct v4l2_pix_format		*pix_fmt;
 	enum s5p_vp_src_color		color;
 	enum s5p_vp_field		field;
+	unsigned int			src_vir_y_addr;
+	unsigned int			src_vir_cb_addr;
+	int				y_size;
+	int				cbcr_size;
+	unsigned int			copy_buff_idx;
 
 #if defined(CONFIG_S5P_SYSMMU_TV)
 	unsigned long base_y, base_c;
@@ -934,7 +1036,7 @@ static int s5p_tvout_vo_s_fmt_type_private(
 			(u32) vparam.base_y, (u32) vparam.base_c,
 			pix_fmt->field);
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_lock();
 #endif
 	/* check progressive or not */
@@ -1031,16 +1133,73 @@ static int s5p_tvout_vo_s_fmt_type_private(
 	s5p_vp_ctrl_set_src_plane(base_y, base_c, pix_fmt->width,
 		pix_fmt->height, color, field);
 #else
-	s5p_vp_ctrl_set_src_plane((u32) vparam.base_y, (u32) vparam.base_c,
-		pix_fmt->width, pix_fmt->height, color, field);
+	if (pix_fmt->priv) {
+		copy_buff_idx =
+			s5ptv_vp_buff.
+				copy_buff_idxs[s5ptv_vp_buff.curr_copy_idx];
+
+		if ((void *)s5ptv_vp_buff.vp_buffs[copy_buff_idx].vir_base
+			== NULL) {
+			s5p_vp_ctrl_set_src_plane(
+				(u32) vparam.base_y, (u32) vparam.base_c,
+				pix_fmt->width, pix_fmt->height, color, field);
+		} else {
+			if (pix_fmt->pixelformat ==
+				V4L2_PIX_FMT_NV12T
+				|| pix_fmt->pixelformat == V4L2_PIX_FMT_NV21T) {
+				y_size = ALIGN(ALIGN(pix_fmt->width, 128) *
+					ALIGN(pix_fmt->height, 32), SZ_8K);
+				cbcr_size = ALIGN(ALIGN(pix_fmt->width, 128) *
+					ALIGN(pix_fmt->height >> 1, 32), SZ_8K);
+			} else {
+				y_size = pix_fmt->width * pix_fmt->height;
+				cbcr_size =
+					pix_fmt->width * (pix_fmt->height >> 1);
+			}
+
+			src_vir_y_addr = (unsigned int)phys_to_virt(
+				(unsigned long)vparam.base_y);
+			src_vir_cb_addr = (unsigned int)phys_to_virt(
+				(unsigned long)vparam.base_c);
+
+			memcpy(
+				(void *)
+				s5ptv_vp_buff.vp_buffs[copy_buff_idx].vir_base,
+				(void *)src_vir_y_addr, y_size);
+			memcpy(
+				(void *)s5ptv_vp_buff.vp_buffs[copy_buff_idx].
+					vir_base + y_size,
+				(void *)src_vir_cb_addr, cbcr_size);
+
+			flush_all_cpu_caches();
+			outer_flush_all();
+
+			s5p_vp_ctrl_set_src_plane(
+				(u32) s5ptv_vp_buff.
+					vp_buffs[copy_buff_idx].phy_base,
+				(u32) s5ptv_vp_buff.
+					vp_buffs[copy_buff_idx].phy_base
+					+ y_size,
+				pix_fmt->width, pix_fmt->height, color, field);
+
+			s5ptv_vp_buff.curr_copy_idx++;
+			if (s5ptv_vp_buff.curr_copy_idx >=
+				S5PTV_VP_BUFF_CNT - 1)
+				s5ptv_vp_buff.curr_copy_idx = 0;
+		}
+	} else {
+		s5p_vp_ctrl_set_src_plane(
+			(u32) vparam.base_y, (u32) vparam.base_c,
+			pix_fmt->width, pix_fmt->height, color, field);
+	}
 #endif
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_unlock();
 #endif
 	return 0;
 
 error_on_s_fmt_type_private:
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_unlock();
 #endif
 	return -1;
@@ -1063,7 +1222,7 @@ static int s5p_tvout_vo_s_fmt_vid_overlay(
 			rect->left, rect->top, rect->width, rect->height,
 			a->fmt.win.global_alpha);
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_lock();
 #endif
 	s5p_tvout_v4l2_private.vo_dst_fmt = a->fmt.win;
@@ -1073,7 +1232,7 @@ static int s5p_tvout_vo_s_fmt_vid_overlay(
 		rect->left, rect->top,
 		rect->width, rect->height);
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_unlock();
 #endif
 	return 0;
@@ -1099,7 +1258,7 @@ static int s5p_tvout_vo_s_crop(
 		struct file *file, void *fh, struct v4l2_crop *a)
 {
 	tvout_dbg("\n");
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_lock();
 #endif
 	switch (a->type) {
@@ -1122,7 +1281,7 @@ static int s5p_tvout_vo_s_crop(
 		tvout_err("Invalid buf type(0x%08x)\n", a->type);
 		break;
 	}
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_unlock();
 #endif
 	return 0;
@@ -1147,7 +1306,7 @@ static int s5p_tvout_vo_s_fbuf(
 			(a->flags & V4L2_FBUF_FLAG_GLOBAL_ALPHA) ? 1 : 0,
 			a->fmt.priv);
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_lock();
 #endif
 
@@ -1156,7 +1315,7 @@ static int s5p_tvout_vo_s_fbuf(
 
 	s5p_vp_ctrl_set_dest_win_priority(a->fmt.priv);
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_unlock();
 #endif
 	return 0;
@@ -1167,15 +1326,21 @@ static int s5p_tvout_vo_overlay(
 {
 	tvout_dbg("%s\n", (i) ? "start" : "stop");
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_lock();
 #endif
-	if (i)
+	if (i) {
 		s5p_vp_ctrl_start();
-	else
+		/* restore vsync interrupt setting */
+		s5p_mixer_set_vsync_interrupt(
+			s5p_mixer_ctrl_get_vsync_interrupt());
+	} else {
+		/* disable vsync interrupt when VP is disabled */
+		s5p_mixer_ctrl_disable_vsync_interrupt();
 		s5p_vp_ctrl_stop();
+	}
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
+#if defined(CONFIG_HAS_EARLYSUSPEND) && defined(CLOCK_GATING_ON_EARLY_SUSPEND)
 	s5p_tvout_mutex_unlock();
 #endif
 	return 0;
