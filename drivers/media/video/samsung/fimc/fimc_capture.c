@@ -31,10 +31,14 @@
 #include <linux/pm_qos_params.h>
 
 #include "fimc.h"
-
-static struct pm_qos_request_list bus_qos_pm_qos_req;
+#define CONFIG_VIDEO_S5K4ECGX ///crystal add 
+#ifdef CONFIG_VIDEO_S5K4ECGX
+extern int mipi_start;
+#endif
 
 int mipid_start=0;
+static struct pm_qos_request_list bus_qos_pm_qos_req;
+
 static const struct v4l2_fmtdesc capture_fmts[] = {
 	{
 		.index		= 0,
@@ -214,6 +218,7 @@ void s3c_csis_start(int csis_id, int lanes, int settle, \
 void s3c_csis_stop(int csis_id) {}
 void s3c_csis_enable_pktdata(int csis_id, bool enable) {}
 #endif
+extern	void s3c_csis_change_resolution(int csis_id, int width, int height); ///crystal add 
 
 static int fimc_init_camera(struct fimc_control *ctrl)
 {
@@ -781,7 +786,6 @@ int fimc_release_subdev(struct fimc_control *ctrl)
 	return 0;
 }
 
-
 static int fimc_configure_subdev(struct fimc_control *ctrl)
 {
 	struct i2c_adapter *i2c_adap;
@@ -792,7 +796,7 @@ static int fimc_configure_subdev(struct fimc_control *ctrl)
 	char *name;
 	int ret = 0;
 
-	i2c_adap = i2c_get_adapter(ctrl->cam->i2c_busnum);
+	i2c_adap = i2c_get_adapter(ctrl->cam->get_i2c_busnum());
 	if (!i2c_adap) {
 		fimc_err("subdev i2c_adapter missing-skip registration\n");
 		return -ENODEV;
@@ -3035,7 +3039,6 @@ if (cam->id == CAMERA_CSI_C){
 	return 0;
 }
 
-
 int fimc_streamoff_capture(void *fh)
 {
 	struct fimc_control *ctrl = fh;
@@ -3104,7 +3107,6 @@ int fimc_streamoff_capture(void *fh)
 	fimc_info1("%s -- fimc%d\n", __func__, ctrl->id);
 	return 0;
 }
-
 int fimc_is_set_zoom(struct fimc_control *ctrl, struct v4l2_control *c)
 {
 	struct v4l2_control is_ctrl;

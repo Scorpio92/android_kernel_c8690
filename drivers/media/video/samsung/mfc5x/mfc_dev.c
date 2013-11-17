@@ -1786,16 +1786,6 @@ static int __init mfc_init(void)
 	return 0;
 }
 
-int mfc_late_init(void)
-{
-	if (platform_driver_register(&mfc_driver) != 0) {
-		printk(KERN_ERR "FIMV MFC platform device registration failed\n");
-		return -1;
-	}
-
-	return 0;
-}
-
 static void __exit mfc_exit(void)
 {
 	platform_driver_unregister(&mfc_driver);

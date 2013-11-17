@@ -33,6 +33,25 @@
 static s32 err_print_cnt;
 
 static struct s3c_csis_info *s3c_csis[S3C_CSIS_CH_NUM];
+static void s3c_csis_update_shadow(struct platform_device *pdev);
+static void s3c_csis_set_resol(struct platform_device *pdev, int width, int height);
+void s3c_csis_change_resolution(int csis_id, int width, int height)
+{
+ struct platform_device *pdev = NULL;
+ struct s3c_platform_csis *pdata = NULL;
+	printk("\n =======CRYSTALcsis %s %d\n",__func__,__LINE__);
+ /* clock & power on */
+ pdev = to_platform_device(s3c_csis[csis_id]->dev);
+ pdata = to_csis_plat(&pdev->dev);
+
+ s3c_csis_set_resol(pdev, width, height);
+ s3c_csis_update_shadow(pdev);
+
+ info("Samsung MIPI-CSIS%d Change resolution:w(%d) h(%d)\n", pdev->id,width,height);
+
+ return;
+}
+EXPORT_SYMBOL(s3c_csis_change_resolution);
 
 static int s3c_csis_set_info(struct platform_device *pdev)
 {

@@ -3,7 +3,6 @@ obj-$(CONFIG_VIDEO_FIMC)	+= fimc/
 else
 obj-$(CONFIG_VIDEO_FIMC)	+= fimc_external_isp/
 endif
-
 obj-$(CONFIG_VIDEO_JPEG)	+= jpeg/
 obj-$(CONFIG_VIDEO_JPEG_V2X)	+= jpeg_v2x/
 obj-$(CONFIG_VIDEO_TVOUT)	+= tvout/

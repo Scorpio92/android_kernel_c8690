@@ -75,6 +75,7 @@ struct s3c_platform_camera {
 	u32				pixelformat;	/* default fourcc */
 
 	int				i2c_busnum;
+	int				(*get_i2c_busnum)(void);
 	struct i2c_board_info		*info;
 	struct v4l2_subdev		*sd;
 
