@@ -25,6 +25,7 @@ config VIDEO_EXYNOS_MEMSIZE_FIMC_IS
 	source "drivers/media/video/exynos/rotator/Kconfig"
 if ARCH_EXYNOS4
 	source "drivers/media/video/exynos/fimc-is/Kconfig"
+	source "drivers/media/video/exynos/fimc-is_external_isp/Kconfig"
 endif
 
 if ARCH_EXYNOS5
