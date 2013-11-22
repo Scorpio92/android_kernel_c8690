@@ -339,8 +339,8 @@ deps_config := \
 	drivers/media/video/samsung/mali/Kconfig \
 	drivers/media/video/samsung/mfc5x/Kconfig \
 	drivers/media/video/samsung/tvout/Kconfig \
-	drivers/media/video/samsung/fimc/Kconfig \
 	drivers/media/video/samsung/fimc_external_isp/Kconfig \
+	drivers/media/video/samsung/fimc/Kconfig \
 	drivers/media/video/samsung/Kconfig \
 	drivers/media/video/pwc/Kconfig \
 	drivers/media/video/sn9c102/Kconfig \
