@@ -1293,8 +1293,12 @@ config USB_S2255
 
 endif # V4L_USB_DRIVERS
 
+#for newman
 source "drivers/media/video/samsung/Kconfig"
 source "drivers/media/video/exynos/Kconfig"
+#for highscreen
+source "drivers/media/video/samsung-h/Kconfig"
+source "drivers/media/video/exynos-h/Kconfig"
 
 endif # VIDEO_CAPTURE_DRIVERS
 
