@@ -49,6 +49,7 @@
 #include <linux/rmap.h>
 #include <linux/module.h>
 #include <linux/delayacct.h>
+#include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/writeback.h>
 #include <linux/memcontrol.h>
@@ -57,6 +58,7 @@
 #include <linux/swapops.h>
 #include <linux/elf.h>
 #include <linux/gfp.h>
+#include <linux/migrate.h>
 
 #include <asm/io.h>
 #include <asm/pgalloc.h>
@@ -206,10 +208,14 @@ static int tlb_next_batch(struct mmu_gather *tlb)
 		return 1;
 	}
 
+	if (tlb->batch_count == MAX_GATHER_BATCH_COUNT)
+		return 0;
+
 	batch = (void *)__get_free_pages(GFP_NOWAIT | __GFP_NOWARN, 0);
 	if (!batch)
 		return 0;
 
+	tlb->batch_count++;
 	batch->next = NULL;
 	batch->nr   = 0;
 	batch->max  = MAX_GATHER_BATCH;
@@ -236,6 +242,7 @@ void tlb_gather_mmu(struct mmu_gather *tlb, struct mm_struct *mm, bool fullmm)
 	tlb->local.nr   = 0;
 	tlb->local.max  = ARRAY_SIZE(tlb->__pages);
 	tlb->active     = &tlb->local;
+	tlb->batch_count = 0;
 
 #ifdef CONFIG_HAVE_RCU_TABLE_FREE
 	tlb->batch = NULL;
@@ -1592,6 +1599,25 @@ static inline int stack_guard_page(struct vm_area_struct *vma, unsigned long add
 	       stack_guard_page_end(vma, addr+PAGE_SIZE);
 }
 
+#ifdef CONFIG_DMA_CMA
+static inline int __replace_cma_page(struct page *page, struct page **res)
+{
+	struct page *newpage;
+	int ret;
+
+	ret = migrate_replace_cma_page(page, &newpage);
+	if (ret == 0) {
+		*res = newpage;
+		return 0;
+	}
+	/*
+	 * Migration errors in case of get_user_pages() might not
+	 * be fatal to CMA itself, so better don't fail here.
+	 */
+	return 0;
+}
+#endif
+
 /**
  * __get_user_pages() - pin user pages in memory
  * @tsk:	task_struct of target task
@@ -1742,6 +1768,11 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 				int ret;
 				unsigned int fault_flags = 0;
 
+#ifdef CONFIG_DMA_CMA
+				if (gup_flags & FOLL_NO_CMA)
+					fault_flags = FAULT_FLAG_NO_CMA;
+#endif
+
 				/* For mlock, just skip the stack guard page. */
 				if (foll_flags & FOLL_MLOCK) {
 					if (stack_guard_page(vma, start))
@@ -1807,6 +1838,16 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 			}
 			if (IS_ERR(page))
 				return i ? i : PTR_ERR(page);
+
+#ifdef CONFIG_DMA_CMA
+			if ((gup_flags & FOLL_NO_CMA)
+			    && is_cma_pageblock(page)) {
+				int rc = __replace_cma_page(page, &page);
+				if (rc)
+					return i ? i : rc;
+			}
+#endif
+
 			if (pages) {
 				pages[i] = page;
 
@@ -1949,6 +1990,26 @@ int get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 				NULL);
 }
 EXPORT_SYMBOL(get_user_pages);
+
+#ifdef CONFIG_DMA_CMA
+int get_user_pages_nocma(struct task_struct *tsk, struct mm_struct *mm,
+		unsigned long start, int nr_pages, int write, int force,
+		struct page **pages, struct vm_area_struct **vmas)
+{
+	int flags = FOLL_TOUCH | FOLL_NO_CMA;
+
+	if (pages)
+		flags |= FOLL_GET;
+	if (write)
+		flags |= FOLL_WRITE;
+	if (force)
+		flags |= FOLL_FORCE;
+
+	return __get_user_pages(tsk, mm, start, nr_pages, flags, pages, vmas,
+				NULL);
+}
+EXPORT_SYMBOL(get_user_pages_nocma);
+#endif
 
 /**
  * get_dump_page() - pin user page in memory while writing it to core dump
@@ -2485,7 +2546,11 @@ static inline void cow_user_page(struct page *dst, struct page *src, unsigned lo
  */
 static int do_wp_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		unsigned long address, pte_t *page_table, pmd_t *pmd,
+#ifdef CONFIG_DMA_CMA
+		spinlock_t *ptl, pte_t orig_pte, unsigned int flags)
+#else
 		spinlock_t *ptl, pte_t orig_pte)
+#endif
 	__releases(ptl)
 {
 	struct page *old_page, *new_page;
@@ -2657,11 +2722,25 @@ gotten:
 		goto oom;
 
 	if (is_zero_pfn(pte_pfn(orig_pte))) {
-		new_page = alloc_zeroed_user_highpage_movable(vma, address);
+#ifdef CONFIG_DMA_CMA
+		if (flags & FAULT_FLAG_NO_CMA)
+			new_page = alloc_zeroed_user_highpage(vma, address);
+		else
+#endif
+			new_page =
+			   alloc_zeroed_user_highpage_movable(vma, address);
+
 		if (!new_page)
 			goto oom;
 	} else {
-		new_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, address);
+#ifdef CONFIG_DMA_CMA
+		if (flags & FAULT_FLAG_NO_CMA)
+			new_page = alloc_page_vma(GFP_HIGHUSER, vma, address);
+		else
+#endif
+			new_page =
+			   alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, address);
+
 		if (!new_page)
 			goto oom;
 		cow_user_page(new_page, old_page, address, vma);
@@ -2888,6 +2967,16 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	entry = pte_to_swp_entry(orig_pte);
 	if (unlikely(non_swap_entry(entry))) {
 		if (is_migration_entry(entry)) {
+#ifdef CONFIG_DMA_CMA
+			/*
+			 * FIXME: mszyprow: cruel, brute-force method for
+			 * letting cma/migration to finish it's job without
+			 * stealing the lock migration_entry_wait() and creating
+			 * a live-lock on the faulted page
+			 * (page->_count == 2 migration failure issue)
+			 */
+			mdelay(10);
+#endif
 			migration_entry_wait(mm, pmd, address);
 		} else if (is_hwpoison_entry(entry)) {
 			ret = VM_FAULT_HWPOISON;
@@ -3021,7 +3110,12 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	}
 
 	if (flags & FAULT_FLAG_WRITE) {
+#ifdef CONFIG_DMA_CMA
+		ret |= do_wp_page(mm, vma, address, page_table,
+				  pmd, ptl, pte, flags);
+#else
 		ret |= do_wp_page(mm, vma, address, page_table, pmd, ptl, pte);
+#endif
 		if (ret & VM_FAULT_ERROR)
 			ret &= VM_FAULT_ERROR;
 		goto out;
@@ -3213,8 +3307,16 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 				ret = VM_FAULT_OOM;
 				goto out;
 			}
-			page = alloc_page_vma(GFP_HIGHUSER_MOVABLE,
-						vma, address);
+
+#ifdef CONFIG_DMA_CMA
+			if (flags & FAULT_FLAG_NO_CMA)
+				page = alloc_page_vma(GFP_HIGHUSER,
+							vma, address);
+			else
+#endif
+				page = alloc_page_vma(GFP_HIGHUSER_MOVABLE,
+							vma, address);
+
 			if (!page) {
 				ret = VM_FAULT_OOM;
 				goto out;
@@ -3422,8 +3524,13 @@ int handle_pte_fault(struct mm_struct *mm,
 		goto unlock;
 	if (flags & FAULT_FLAG_WRITE) {
 		if (!pte_write(entry))
+#ifdef CONFIG_DMA_CMA
+			return do_wp_page(mm, vma, address,
+					pte, pmd, ptl, entry, flags);
+#else
 			return do_wp_page(mm, vma, address,
 					pte, pmd, ptl, entry);
+#endif
 		entry = pte_mkdirty(entry);
 	}
 	entry = pte_mkyoung(entry);
@@ -3466,6 +3573,7 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	if (unlikely(is_vm_hugetlb_page(vma)))
 		return hugetlb_fault(mm, vma, address, flags);
 
+retry:
 	pgd = pgd_offset(mm, address);
 	pud = pud_alloc(mm, pgd, address);
 	if (!pud)
@@ -3479,13 +3587,24 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 							  pmd, flags);
 	} else {
 		pmd_t orig_pmd = *pmd;
+		int ret;
+
 		barrier();
 		if (pmd_trans_huge(orig_pmd)) {
 			if (flags & FAULT_FLAG_WRITE &&
 			    !pmd_write(orig_pmd) &&
-			    !pmd_trans_splitting(orig_pmd))
-				return do_huge_pmd_wp_page(mm, vma, address,
-							   pmd, orig_pmd);
+			    !pmd_trans_splitting(orig_pmd)) {
+				ret = do_huge_pmd_wp_page(mm, vma, address, pmd,
+							  orig_pmd);
+				/*
+				 * If COW results in an oom, the huge pmd will
+				 * have been split, so retry the fault on the
+				 * pte for a smaller charge.
+				 */
+				if (unlikely(ret & VM_FAULT_OOM))
+					goto retry;
+				return ret;
+			}
 			return 0;
 		}
 	}
