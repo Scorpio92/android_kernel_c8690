@@ -570,6 +570,7 @@ MODINFO_ATTR(version);
 MODINFO_ATTR(srcversion);
 
 static char last_unloaded_module[MODULE_NAME_LEN+1];
+static unsigned int last_unloaded_module_addr;
 
 #ifdef CONFIG_MODULE_UNLOAD
 
@@ -841,7 +842,7 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 
 	/* Store the name of the last unloaded module for diagnostic purposes */
 	strlcpy(last_unloaded_module, mod->name, sizeof(last_unloaded_module));
-
+	last_unloaded_module_addr = (unsigned int)&mod->module_core;
 	free_module(mod);
 	return 0;
 out:
@@ -2423,7 +2424,7 @@ static int check_modinfo(struct module *mod, struct load_info *info)
 {
 	const char *modmagic = get_modinfo(info, "vermagic");
 	int err;
-	return 0;
+
 	/* This is allowed: modprobe --force will invalidate it. */
 	if (!modmagic) {
 		err = try_to_force_load(mod, "bad vermagic");
@@ -2603,6 +2604,10 @@ static int check_module_license_and_versions(struct module *mod)
 
 	/* driverloader was caught wrongly pretending to be under GPL */
 	if (strcmp(mod->name, "driverloader") == 0)
+		add_taint_module(mod, TAINT_PROPRIETARY_MODULE);
+
+	/* lve claims to be GPL but upstream won't provide source */
+	if (strcmp(mod->name, "lve") == 0)
 		add_taint_module(mod, TAINT_PROPRIETARY_MODULE);
 
 #ifdef CONFIG_MODVERSIONS
@@ -3404,7 +3409,8 @@ void print_modules(void)
 		printk(" %s%s", mod->name, module_flags(mod, buf));
 	preempt_enable();
 	if (last_unloaded_module[0])
-		printk(" [last unloaded: %s]", last_unloaded_module);
+		printk(" [last unloaded: %s](%x)", last_unloaded_module,
+			last_unloaded_module_addr);
 	printk("\n");
 }
 

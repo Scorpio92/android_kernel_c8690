@@ -31,11 +31,6 @@
 #else
 #define all_var 0
 #endif
-#ifdef CONFIG_KERNEL_PANIC_DUMP
-//extern char *PANIC_Base;
-//extern char *PANIC_Current;
-//extern int kernel_panic_logging;
-#endif
 
 /*
  * These will be re-linked against their real values
@@ -419,12 +414,6 @@ void __print_symbol(const char *fmt, unsigned long address)
 	sprint_symbol(buffer, address);
 
 	printk(fmt, buffer);
-#ifdef CONFIG_KERNEL_PANIC_DUMP
-//	if(PANIC_Base) {
-//		if(kernel_panic_logging)
-//			PANIC_Current += sprintf(PANIC_Current,fmt,buffer);
-//	}
-#endif	
 }
 EXPORT_SYMBOL(__print_symbol);
 

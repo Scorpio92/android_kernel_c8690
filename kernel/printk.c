@@ -43,21 +43,17 @@
 #include <linux/rculist.h>
 
 #include <asm/uaccess.h>
-#ifdef CONFIG_KERNEL_PANIC_DUMP	
-#include <mach/panic-dump.h>
-#include <asm/io.h>
-#endif
+#include <mach/sec_debug.h>
+
 /*
  * Architectures can override it:
  */
 void asmlinkage __attribute__((weak)) early_printk(const char *fmt, ...)
 {
 }
-#ifndef CONFIG_KERNEL_PANIC_DUMP
+
 #define __LOG_BUF_LEN	(1 << CONFIG_LOG_BUF_SHIFT)
-#else
-#define __LOG_BUF_LEN	(128*1024)
-#endif
+
 #ifdef        CONFIG_DEBUG_LL
 extern void printascii(char *);
 #endif
@@ -67,20 +63,17 @@ extern void printascii(char *);
 
 /* We show everything that is MORE important than this.. */
 #define MINIMUM_CONSOLE_LOGLEVEL 1 /* Minimum loglevel we let people use */
-#ifdef CONFIG_DEBUG_LL
-#define DEFAULT_CONSOLE_LOGLEVEL 1//7 /* anything MORE serious than KERN_DEBUG */
-#else
 #define DEFAULT_CONSOLE_LOGLEVEL 7 /* anything MORE serious than KERN_DEBUG */
-#endif
+
 DECLARE_WAIT_QUEUE_HEAD(log_wait);
-#if 1
+
 int console_printk[4] = {
 	DEFAULT_CONSOLE_LOGLEVEL,	/* console_loglevel */
 	DEFAULT_MESSAGE_LOGLEVEL,	/* default_message_loglevel */
 	MINIMUM_CONSOLE_LOGLEVEL,	/* minimum_console_loglevel */
 	DEFAULT_CONSOLE_LOGLEVEL,	/* default_console_loglevel */
 };
-#endif
+
 /*
  * Low level drivers may need that to know if they can schedule in
  * their unblank() callback or not. So let's export it.
@@ -155,17 +148,13 @@ EXPORT_SYMBOL(console_set_on_cmdline);
 static int console_may_schedule;
 
 #ifdef CONFIG_PRINTK
-static char __log_buf[__LOG_BUF_LEN];
-static char *log_buf= __log_buf;
 
+static char __log_buf[__LOG_BUF_LEN] __nosavedata;
+static char *log_buf = __log_buf;
 static int log_buf_len = __LOG_BUF_LEN;
 static unsigned logged_chars; /* Number of chars produced since last read+clear operation */
 static int saved_console_loglevel = -1;
 
-//#ifdef CONFIG_KERNEL_PANIC_DUMP
-//char * gp_log_buf = __log_buf;
-//int gplog_buf_len = __LOG_BUF_LEN;
-//#endif
 #ifdef CONFIG_KEXEC
 /*
  * This appends the listed symbols to /proc/vmcoreinfo
@@ -201,45 +190,6 @@ static int __init log_buf_len_setup(char *str)
 }
 early_param("log_buf_len", log_buf_len_setup);
 
-//#if 0
-#ifdef CONFIG_KERNEL_PANIC_DUMP
-void __init setup_log_buf(int early)
-{
-		unsigned long flags;
-	unsigned start, dest_idx, offset;
-	char *new_log_buf;
-	int free;
-
-	
-	spin_lock_irqsave(&logbuf_lock, flags);
-	log_buf_len =PANIC_MEM_POOL_STEP;//512k
-	log_buf =panic_dump_buffer(0);
-	new_log_buf_len = 0;
-	free = __LOG_BUF_LEN - log_end;
-
-	offset = start = min(con_start, log_start);
-	dest_idx = 0;
-	while (start != log_end) {
-		unsigned log_idx_mask = start & (__LOG_BUF_LEN - 1);
-		log_buf[dest_idx] = __log_buf[log_idx_mask];
-		start++;
-		dest_idx++;
-	}
-	log_start -= offset;
-	con_start -= offset;
-	log_end -= offset;
-	spin_unlock_irqrestore(&logbuf_lock, flags);
-
-	pr_info("log_buf_len: %d\n", log_buf_len);
-	pr_info("early log buf free: %d(%d%%)\n",
-		free, (free * 100) / __LOG_BUF_LEN);
-	
-}
-
-#else
-#ifdef CONFIG_KERNEL_PANIC_DUMP
-static bool b_log_setup = 0;
-#endif
 void __init setup_log_buf(int early)
 {
 	unsigned long flags;
@@ -247,15 +197,8 @@ void __init setup_log_buf(int early)
 	char *new_log_buf;
 	int free;
 
-	if (!new_log_buf_len){
-		#ifdef CONFIG_KERNEL_PANIC_DUMP
-		printk("*********************************************\n");
-		printk("**************setup_log_buf**  RETURN !!!!!!!\n");
-		printk("*********************************************\n");
-		b_log_setup=1;
-		#endif
+	if (!new_log_buf_len)
 		return;
-		}
 
 	if (early) {
 		unsigned long mem;
@@ -273,7 +216,6 @@ void __init setup_log_buf(int early)
 			new_log_buf_len);
 		return;
 	}
-
 	spin_lock_irqsave(&logbuf_lock, flags);
 	log_buf_len = new_log_buf_len;
 	log_buf = new_log_buf;
@@ -284,12 +226,8 @@ void __init setup_log_buf(int early)
 	dest_idx = 0;
 	while (start != log_end) {
 		unsigned log_idx_mask = start & (__LOG_BUF_LEN - 1);
-#if 1
-//#ifndef CONFIG_KERNEL_PANIC_DUMP
+
 		log_buf[dest_idx] = __log_buf[log_idx_mask];
-#else
-		log_buf[dest_idx] = panic_dump_buffer(0)[log_idx_mask];
-#endif
 		start++;
 		dest_idx++;
 	}
@@ -302,7 +240,7 @@ void __init setup_log_buf(int early)
 	pr_info("early log buf free: %d(%d%%)\n",
 		free, (free * 100) / __LOG_BUF_LEN);
 }
-#endif
+
 #ifdef CONFIG_BOOT_PRINTK_DELAY
 
 static int boot_delay; /* msecs delay after each printk during bootup */
@@ -652,9 +590,6 @@ early_param("ignore_loglevel", ignore_loglevel_setup);
 static void _call_console_drivers(unsigned start,
 				unsigned end, int msg_log_level)
 {
-#ifdef CONFIG_DEBUG_LL
-	return; //ly
-#endif
 	if ((msg_log_level < console_loglevel || ignore_loglevel) &&
 			console_drivers && start != end) {
 		if ((start & LOG_BUF_MASK) > (end & LOG_BUF_MASK)) {
@@ -749,8 +684,19 @@ static void call_console_drivers(unsigned start, unsigned end)
 	start_print = start;
 	while (cur_index != end) {
 		if (msg_level < 0 && ((end - cur_index) > 2)) {
+			/*
+			 * prepare buf_prefix, as a contiguous array,
+			 * to be processed by log_prefix function
+			 */
+			char buf_prefix[SYSLOG_PRI_MAX_LENGTH+1];
+			unsigned i;
+			for (i = 0; i < ((end - cur_index)) && (i < SYSLOG_PRI_MAX_LENGTH); i++) {
+				buf_prefix[i] = LOG_BUF(cur_index + i);
+			}
+			buf_prefix[i] = '\0'; /* force '\0' as last string character */
+
 			/* strip log prefix */
-			cur_index += log_prefix(&LOG_BUF(cur_index), &msg_level, NULL);
+			cur_index += log_prefix((const char *)&buf_prefix, &msg_level, NULL);
 			start_print = cur_index;
 		}
 		while (cur_index != end) {
@@ -777,6 +723,27 @@ static void call_console_drivers(unsigned start, unsigned end)
 	_call_console_drivers(start_print, end, msg_level);
 }
 
+#ifdef CONFIG_SEC_LOG
+static void (*log_char_hook)(char c);
+
+void register_log_char_hook(void (*f) (char c))
+{
+	unsigned start;
+	unsigned long flags;
+
+	spin_lock_irqsave(&logbuf_lock, flags);
+
+	start = min(con_start, log_start);
+	while (start != log_end)
+		f(__log_buf[start++ & (__LOG_BUF_LEN - 1)]);
+
+	log_char_hook = f;
+
+	spin_unlock_irqrestore(&logbuf_lock, flags);
+}
+EXPORT_SYMBOL(register_log_char_hook);
+#endif
+
 static void emit_log_char(char c)
 {
 	LOG_BUF(log_end) = c;
@@ -787,6 +754,11 @@ static void emit_log_char(char c)
 		con_start = log_end - log_buf_len;
 	if (logged_chars < log_buf_len)
 		logged_chars++;
+
+#ifdef CONFIG_SEC_LOG
+	if (log_char_hook)
+		log_char_hook(c);
+#endif
 }
 
 /*
@@ -816,6 +788,21 @@ static int printk_time = 1;
 static int printk_time = 0;
 #endif
 module_param_named(time, printk_time, bool, S_IRUGO | S_IWUSR);
+
+#if defined(CONFIG_PRINTK_CPU_ID)
+static int printk_cpu_id = 1;
+#else
+static int printk_cpu_id = 0;
+#endif
+module_param_named(cpu, printk_cpu_id, bool, S_IRUGO | S_IWUSR);
+
+#if defined(CONFIG_PRINTK_PID)
+static int printk_pid = 1;
+#else
+static int printk_pid;
+#endif
+module_param_named(pid, printk_pid, bool, S_IRUGO | S_IWUSR);
+
 
 /* Check if we have any console registered that can be called early in boot. */
 static int have_callable_console(void)
@@ -940,8 +927,7 @@ static inline void printk_delay(void)
 		}
 	}
 }
-//extern  bool panic_enabled;
-//extern bool step1, step2,step3,step4, step5;
+
 asmlinkage int vprintk(const char *fmt, va_list args)
 {
 	int printed_len = 0;
@@ -991,60 +977,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	printed_len += vscnprintf(printk_buf + printed_len,
 				  sizeof(printk_buf) - printed_len, fmt, args);
 
-
-
-#if 0
-#ifdef CONFIG_KERNEL_PANIC_DUMP
-	if(b_log_setup)
-	{	unsigned int i=0;
-		static int dump_len = 0;
-		volatile unsigned char * dump_buf= panic_dump_buffer(0);
-		volatile unsigned char * buf=printk_buf;
-		#if 0
-		//dump_len += vscnprintf(dump_buf + dump_len,
-		//		  PANIC_MEM_POOL_STEP - dump_len, fmt, args);
-		if(step1){
-				
-				//dump_len=0; //cong tou kaishi
-				dump_len=0;
-				memset (dump_buf+dump_len,0,64*1024);
-			}
-		else if (step2){
-			
-					dump_len=64*1024;
-					memset (dump_buf+dump_len,0,64*1024);
-			}
-		else if (step3){
-					dump_len=64*1024*2;
-					memset (dump_buf+dump_len,0,64*1024);
-			}
-			else if (step4){
-					dump_len=64*1024*3;
-					memset (dump_buf+dump_len,0,64*1024);
-			}
-						else if (step5){
-					dump_len=64*1024*4;
-					memset (dump_buf+dump_len,0,64*1024);
-			}
-		#endif
-		#if 1
-		dump_len += vscnprintf(dump_buf + dump_len,
-				  PANIC_MEM_POOL_STEP - dump_len, fmt, args);
-		#else
-		for(i=0; i<printed_len; i++)
-			__raw_writeb(*(buf++), dump_buf+dump_len+i);
-		dump_len+=printed_len;
-		#endif
-
-	/* Emit the output into the temporary buffer */
-	//printed_len += vscnprintf(printk_buf + printed_len,
-	//			  sizeof(printk_buf) - printed_len, ("##\n"),args);
-		
-	}
-#endif 
-#endif
 #ifdef	CONFIG_DEBUG_LL
-//if(!panic_enabled)
 	printascii(printk_buf);
 #endif
 
@@ -1104,6 +1037,30 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 				tlen = sprintf(tbuf, "[%5lu.%06lu] ",
 						(unsigned long) t,
 						nanosec_rem / 1000);
+
+				for (tp = tbuf; tp < tbuf + tlen; tp++)
+					emit_log_char(*tp);
+				printed_len += tlen;
+			}
+
+			if (printk_cpu_id) {
+				/* Add the cpu id */
+				char tbuf[10], *tp;
+				unsigned tlen;
+
+				tlen = sprintf(tbuf, "c%u ", printk_cpu);
+
+				for (tp = tbuf; tp < tbuf + tlen; tp++)
+					emit_log_char(*tp);
+				printed_len += tlen;
+			}
+
+			if (printk_pid) {
+				/* Add the current process id */
+				char tbuf[10], *tp;
+				unsigned tlen;
+
+				tlen = sprintf(tbuf, "%6u ", current->pid);
 
 				for (tp = tbuf; tp < tbuf + tlen; tp++)
 					emit_log_char(*tp);
@@ -1270,12 +1227,8 @@ int update_console_cmdline(char *name, int idx, char *name_new, int idx_new, cha
 	/* not found */
 	return -1;
 }
-#ifdef CONFIG_DEBUG_LL
-int console_suspend_enabled =0;	//   1;
-#else
-int console_suspend_enabled = 1;
-#endif
 
+int console_suspend_enabled = 1;
 EXPORT_SYMBOL(console_suspend_enabled);
 
 static int __init console_suspend_disable(char *str)
@@ -1306,49 +1259,14 @@ void resume_console(void)
 		return;
 	down(&console_sem);
 	console_suspended = 0;
-// Cellon modify start, Ted Shi, 2012/11/20, for remove sleep kernel log to optimize resume time
-#ifdef CONFIG_CELLON_SLEEP_LOG
 	console_unlock();
-#else
-	{
-	unsigned long flags;
-	unsigned _con_start, _log_end;
-	unsigned wake_klogd = 0;
-
-	if (console_suspended) {
-		up(&console_sem);
-		return;
-	}
-
-	console_may_schedule = 0;
-
-	for ( ; ; ) {
-		spin_lock_irqsave(&logbuf_lock, flags);
-		wake_klogd |= log_start - log_end;
-		if (con_start == log_end)
-			break;			/* Nothing to print */
-		_con_start = con_start;
-		_log_end = log_end;
-		con_start = log_end;		/* Flush */
-		spin_unlock(&logbuf_lock);
-		stop_critical_timings();	/* don't trace print latency */
-		start_critical_timings();
-		local_irq_restore(flags);
-	}
-	console_locked = 0;
-
-	/* Release the exclusive_console once it is used */
-	if (unlikely(exclusive_console))
-		exclusive_console = NULL;
-
-	up(&console_sem);
-	spin_unlock_irqrestore(&logbuf_lock, flags);
-	if (wake_klogd)
-		wake_up_klogd();
-	}
-#endif
-// Cellon modify end, Ted Shi, 2012/11/20
 }
+
+int get_console_suspended(void)
+{
+	return console_suspended;
+}
+EXPORT_SYMBOL(get_console_suspended);
 
 /**
  * console_cpu_notify - print deferred console messages after CPU hotplug
@@ -1955,4 +1873,12 @@ void kmsg_dump(enum kmsg_dump_reason reason)
 		dumper->dump(dumper, reason, s1, l1, s2, l2);
 	rcu_read_unlock();
 }
+#endif
+
+#ifdef CONFIG_MACH_PX
+void logbuf_force_unlock(void)
+{
+	logbuf_lock = __SPIN_LOCK_UNLOCKED(logbuf_lock);
+}
+EXPORT_SYMBOL(logbuf_force_unlock);
 #endif
