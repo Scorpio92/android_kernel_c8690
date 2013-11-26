@@ -375,7 +375,21 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 			 -pipe \
 			 -ffast-math \
 			 -march=armv7-a \
-			 -mtune=cortex-a9
+			 -mtune=cortex-a9 \
+			 -mfpu=neon \
+			 -fsingle-precision-constant \
+			 -fgcse-lm -fgcse-sm -fsched-spec-load -fforce-addr
+
+ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
+	KBUILD_CFLAGS += -Os
+endif
+ifdef CONFIG_CC_OPTIMIZE_DEFAULT
+	KBUILD_CFLAGS += -O2
+endif
+ifdef CONFIG_CC_OPTIMIZE_MORE
+	KBUILD_CFLAGS += -O3 -fmodulo-sched -fmodulo-sched-allow-regmoves -fno-tree-vectorize
+endif
+
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
 KBUILD_AFLAGS   := -D__ASSEMBLY__
