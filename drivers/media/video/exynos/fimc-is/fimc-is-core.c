@@ -27,7 +27,7 @@
 #include <linux/pm_runtime.h>
 
 #include <linux/videodev2.h>
-#include <linux/videodev2_samsung.h>
+#include <linux/videodev2_exynos_camera.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
@@ -46,10 +46,8 @@
 #include "fimc-is-cmd.h"
 #include "fimc-is-err.h"
 
-#if defined(TN_MIDAS_PROJECT)
 extern struct class *camera_class;
 struct device *s5k6a3_dev; /*sys/class/camera/front*/
-#endif
 
 struct fimc_is_dev *to_fimc_is_dev(struct v4l2_subdev *sdev)
 {
@@ -249,7 +247,6 @@ static irqreturn_t fimc_is_irq_handler1(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-#if defined(TN_MIDAS_PROJECT)
 static ssize_t s5k6a3_camera_front_camtype_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
@@ -261,44 +258,14 @@ static ssize_t s5k6a3_camera_front_camtype_show(struct device *dev,
 static ssize_t s5k6a3_camera_front_camfw_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
-	char fw_sd[7];
-	char fw_ori[7];
-	struct file *fp_sd;
-	struct file *fp_ori;
-
-	mm_segment_t old_fs;
-	old_fs = get_fs();
-	set_fs(KERNEL_DS);
-
-	fp_ori = filp_open("/vendor/firmware/fimc_is_fw.bin", O_RDONLY, 0);
-
-	if (IS_ERR(fp_ori))
-		return sprintf(buf, "%s\n", "Error!!!");
-
-	vfs_llseek(fp_ori, -7, SEEK_END);
-	vfs_read(fp_ori, (char __user *)fw_ori, 7, &fp_ori->f_pos);
-	fw_ori[6] = '\0';
-	filp_close(fp_ori, current->files);
-
-	fp_sd = filp_open("/sdcard/fimc_is_fw.bin", O_RDONLY, 0);
-
-	if (IS_ERR(fp_sd))
-		return sprintf(buf, "%s %s\n", fw_ori, fw_ori);
-	else {
-		vfs_llseek(fp_sd, -7, SEEK_END);
-		vfs_read(fp_sd, (char __user *)fw_sd, 7, &fp_sd->f_pos);
-		fw_sd[6] = '\0';
-		filp_close(fp_sd, current->files);
-	}
-	set_fs(old_fs);
-	return sprintf(buf, "%s %s\n", fw_ori, fw_sd);
+	char type[] = "S5K6A3";
+	return sprintf(buf, "%s %s\n", type, type);
 
 }
 
 static DEVICE_ATTR(front_camtype, S_IRUGO,
 		s5k6a3_camera_front_camtype_show, NULL);
 static DEVICE_ATTR(front_camfw, S_IRUGO, s5k6a3_camera_front_camfw_show, NULL);
-#endif
 
 static int fimc_is_probe(struct platform_device *pdev)
 {
@@ -390,6 +357,10 @@ static int fimc_is_probe(struct platform_device *pdev)
 		snprintf(v4l2_dev->name, sizeof(v4l2_dev->name),
 			 "%s.isp", dev_name(&dev->pdev->dev));
 	ret = v4l2_device_register(NULL, v4l2_dev);
+	if (ret) {
+		v4l2_err(v4l2_dev, "Failed to register v4l2 device\n");
+		goto err_vd_reg;
+	}
 
 	snprintf(dev->video[FIMC_IS_VIDEO_NUM_BAYER].vd.name,
 			sizeof(dev->video[FIMC_IS_VIDEO_NUM_BAYER].vd.name),
@@ -418,10 +389,8 @@ static int fimc_is_probe(struct platform_device *pdev)
 
 	ret = video_register_device(&dev->video[FIMC_IS_VIDEO_NUM_BAYER].vd,
 							VFL_TYPE_GRABBER, 30);
-	if (ret) {
-		v4l2_err(v4l2_dev, "Failed to register video device\n");
-		goto err_vd_reg;
-	}
+	if (ret)
+		goto p_err_device_register;
 
 	printk(KERN_INFO "FIMC-IS Video node :: ISP %d minor : %d\n",
 		dev->video[FIMC_IS_VIDEO_NUM_BAYER].vd.num,
@@ -445,6 +414,7 @@ static int fimc_is_probe(struct platform_device *pdev)
 		dev->pdata->clk_get(pdev);
 	} else {
 		err("#### failed to Get Clock####\n");
+		ret = -EINVAL;
 		goto p_err_init_mem;
 	}
 	/* Init v4l2 sub device */
@@ -476,8 +446,9 @@ static int fimc_is_probe(struct platform_device *pdev)
 	dev->af.af_state = FIMC_IS_AF_IDLE;
 	dev->af.mode = IS_FOCUS_MODE_IDLE;
 	dev->low_power_mode = false;
-
-#if defined(TN_MIDAS_PROJECT)
+	dev->fw.state = 0;
+	dev->setfile.state = 0;
+#if defined(M0)
 	s5k6a3_dev = device_create(camera_class, NULL, 0, NULL, "front");
 	if (IS_ERR(s5k6a3_dev)) {
 		printk(KERN_ERR "failed to create device!\n");
@@ -497,11 +468,11 @@ static int fimc_is_probe(struct platform_device *pdev)
 	return 0;
 
 p_err_init_mem:
-	free_irq(dev->irq1, dev);
 #if defined(CONFIG_VIDEO_EXYNOS_FIMC_IS_BAYER)
 err_vd_reg:
-	video_device_release(&dev->video[FIMC_IS_VIDEO_NUM_BAYER].vd);
+p_err_device_register:
 #endif
+	free_irq(dev->irq1, dev);
 p_err_req_irq:
 p_err_get_irq:
 	iounmap(dev->regs);

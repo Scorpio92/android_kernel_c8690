@@ -28,7 +28,10 @@ void *fimc_is_cma_init(struct fimc_is_dev *isp)
 				FIMC_IS_MEM_ISP_BUF, 0, false);
 }
 
-void fimc_is_cma_resume(void *alloc_ctx) {}
+int fimc_is_cma_resume(void *alloc_ctx)
+{
+	return 1;
+}
 void fimc_is_cma_suspend(void *alloc_ctx) {}
 void fimc_is_cma_set_cacheable(void *alloc_ctx, bool cacheable) {}
 

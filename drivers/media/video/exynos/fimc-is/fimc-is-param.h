@@ -14,7 +14,7 @@
 #ifndef FIMC_IS_PARAMS_H_
 #define FIMC_IS_PARAMS_H_
 
-#define IS_REGION_VER 121  /* IS REGION VERSION 1.21 */
+#define IS_REGION_VER 124  /* IS REGION VERSION 1.24 */
 
 /* MACROs */
 #define IS_SET_PARAM_BIT(dev, num) \
@@ -237,6 +237,8 @@
 	(dev->is_p_region->parameter.isp.dma1_output.buffer_address = x)
 #define IS_ISP_SET_PARAM_DMA_OUTPUT1_NODIFY_DMA_DONE(dev, x) \
 	(dev->is_p_region->parameter.isp.dma1_output.notify_dma_done = x)
+#define IS_ISP_SET_PARAM_DMA_OUTPUT1_MASK(dev, x) \
+	(dev->is_p_region->parameter.isp.dma1_output.dma_out_mask = x)
 #define IS_ISP_SET_PARAM_DMA_OUTPUT1_ERR(dev, x) \
 		(dev->is_p_region->parameter.isp.dma1_output.err = x)
 
@@ -260,6 +262,8 @@
 		(dev->is_p_region->parameter.isp.dma2_output.buffer_address = x)
 #define IS_ISP_SET_PARAM_DMA_OUTPUT2_NODIFY_DMA_DONE(dev, x) \
 	(dev->is_p_region->parameter.isp.dma2_output.notify_dma_done = x)
+#define IS_ISP_SET_PARAM_DMA_OUTPUT2_MASK(dev, x) \
+	(dev->is_p_region->parameter.isp.dma2_output.dma_out_mask = x)
 #define IS_ISP_SET_PARAM_DMA_OUTPUT2_ERR(dev, x) \
 		(dev->is_p_region->parameter.isp.dma2_output.err = x)
 
@@ -1228,7 +1232,8 @@ struct param_dma_output {
 	u32	buffer_number;
 	u32	buffer_address;
 	u32	notify_dma_done;
-	u32	reserved[PARAMETER_MAX_MEMBER-11];
+	u32	dma_out_mask;
+	u32	reserved[PARAMETER_MAX_MEMBER-12];
 	u32	err;
 };
 
@@ -1609,8 +1614,8 @@ struct is_face_marker {
 	u32	roll_angle;
 	u32	yaw_angle;
 	u32	confidence;
-	u32	smile_level;
-	u32	blink_level;
+	s32	smile_level;
+	s32	blink_level;
 };
 
 #define MAX_FRAME_COUNT		8
@@ -1686,5 +1691,19 @@ struct is_debug_control {
 	u32 assert_flag;	/* 0: Not invoked, 1: Invoked */
 	u32 pabort_flag;	/* 0: Not invoked, 1: Invoked */
 	u32 dabort_flag;	/* 0: Not invoked, 1: Invoked */
+};
+
+struct sensor_open_extended {
+	u32 actuator_type;
+	u32 mclk;
+	u32 mipi_lane_num;
+	u32 mipi_speed;
+	/* Skip setfile loading when fast_open_sensor is not 0 */
+	u32 fast_open_sensor;
+	/* Activatiing sensor self calibration mode (6A3) */
+	u32 self_calibration_mode;
+	/* This field is to adjust I2c clock based on ACLK200 */
+	/* This value is varied in case of rev 0.2 */
+	u32 i2c_sclk;
 };
 #endif

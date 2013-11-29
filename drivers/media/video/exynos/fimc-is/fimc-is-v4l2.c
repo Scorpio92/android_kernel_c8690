@@ -29,7 +29,7 @@
 #include <linux/workqueue.h>
 
 #include <linux/videodev2.h>
-#include <linux/videodev2_samsung.h>
+#include <linux/videodev2_exynos_camera.h>
 #include <media/videobuf2-core.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-ioctl.h>
@@ -87,6 +87,13 @@ static int fimc_is_request_firmware(struct fimc_is_dev *dev)
 	memcpy((void *)phys_to_virt(dev->mem.base), (void *)buf, fsize);
 	fimc_is_mem_cache_clean((void *)phys_to_virt(dev->mem.base),
 		fsize + 1);
+	if (dev->mem.fw_ref_base > 0) {
+		memcpy((void *)phys_to_virt(dev->mem.fw_ref_base),
+							(void *)buf, fsize);
+		fimc_is_mem_cache_clean(
+			(void *)phys_to_virt(dev->mem.fw_ref_base), fsize + 1);
+		dev->fw.size = fsize;
+	}
 #elif defined(CONFIG_VIDEOBUF2_ION)
 	if (dev->mem.bitproc_buf == 0) {
 		err("failed to load FIMC-IS F/W, FIMC-IS will not working\n");
@@ -121,6 +128,14 @@ request_fw:
 				fw_blob->data, fw_blob->size);
 		fimc_is_mem_cache_clean((void *)phys_to_virt(dev->mem.base),
 							fw_blob->size + 1);
+		if (dev->mem.fw_ref_base > 0) {
+			memcpy((void *)phys_to_virt(dev->mem.fw_ref_base),
+						fw_blob->data, fw_blob->size);
+			fimc_is_mem_cache_clean(
+				(void *)phys_to_virt(dev->mem.fw_ref_base),
+				fw_blob->size + 1);
+			dev->fw.size = fw_blob->size;
+		}
 #elif defined(CONFIG_VIDEOBUF2_ION)
 		if (dev->mem.bitproc_buf == 0) {
 			err("failed to load FIMC-IS F/W\n");
@@ -204,6 +219,14 @@ static int fimc_is_load_setfile(struct fimc_is_dev *dev)
 	fimc_is_mem_cache_clean(
 		(void *)phys_to_virt(dev->mem.base + dev->setfile.base),
 		fsize + 1);
+	if (dev->mem.setfile_ref_base > 0) {
+		memcpy((void *)phys_to_virt(dev->mem.setfile_ref_base),
+							(void *)buf, fsize);
+		fimc_is_mem_cache_clean(
+			(void *)phys_to_virt(dev->mem.setfile_ref_base),
+			fsize + 1);
+		dev->setfile.size = fsize;
+	}
 #elif defined(CONFIG_VIDEOBUF2_ION)
 	if (dev->mem.bitproc_buf == 0) {
 		err("failed to load FIMC-IS F/W, FIMC-IS will not working\n");
@@ -217,7 +240,7 @@ static int fimc_is_load_setfile(struct fimc_is_dev *dev)
 	vfs_llseek(fp, -FIMC_IS_SETFILE_INFO_LENGTH, SEEK_END);
 	vfs_read(fp, (char __user *)dev->fw.setfile_info,
 				FIMC_IS_SETFILE_INFO_LENGTH, &fp->f_pos);
-	dev->fw.state = 1;
+	dev->setfile.state = 1;
 request_fw:
 	if (fw_requested) {
 		set_fs(old_fs);
@@ -235,6 +258,14 @@ request_fw:
 		fimc_is_mem_cache_clean(
 			(void *)phys_to_virt(dev->mem.base + dev->setfile.base),
 			fw_blob->size + 1);
+		if (dev->mem.setfile_ref_base > 0) {
+			memcpy((void *)phys_to_virt(dev->mem.setfile_ref_base),
+					fw_blob->data, fw_blob->size);
+			fimc_is_mem_cache_clean(
+				(void *)phys_to_virt(dev->mem.setfile_ref_base),
+				fw_blob->size + 1);
+			dev->setfile.size = fw_blob->size;
+		}
 #elif defined(CONFIG_VIDEOBUF2_ION)
 		if (dev->mem.bitproc_buf == 0) {
 			err("failed to load FIMC-IS F/W\n");
@@ -278,7 +309,6 @@ out:
 */
 static int fimc_is_load_fw(struct v4l2_subdev *sd)
 {
-	u32 timeout;
 	int ret = 0;
 	struct fimc_is_dev *dev = to_fimc_is_dev(sd);
 	dbg("+++ fimc_is_load_fw\n");
@@ -287,18 +317,18 @@ static int fimc_is_load_fw(struct v4l2_subdev *sd)
 		return ret;
 	}
 	/* 1. Load IS firmware */
-	dev->fw.state = 0;
+	if (dev->fw.state && (dev->mem.fw_ref_base > 0)) {
+		memcpy((void *)phys_to_virt(dev->mem.base),
+			(void *)phys_to_virt(dev->mem.fw_ref_base),
+			dev->fw.size);
+		fimc_is_mem_cache_clean((void *)phys_to_virt(dev->mem.base),
+							dev->fw.size + 1);
+	} else {
 		ret = fimc_is_request_firmware(dev);
 		if (ret) {
 			err("failed to fimc_is_request_firmware (%d)\n", ret);
 			return -EINVAL;
 		}
-	timeout = 30;
-	while (!dev->fw.state) {
-		if (timeout == 0)
-			err("Load firmware failed\n");
-		timeout--;
-		mdelay(1);
 	}
 	/* 2. Init GPIO (UART) */
 	ret = fimc_is_hw_io_init(dev);
@@ -335,7 +365,7 @@ int fimc_is_s_power(struct v4l2_subdev *sd, int on)
 	struct device *dev = &is_dev->pdev->dev;
 	int ret = 0;
 
-	dbg("fimc_is_s_power\n");
+	printk(KERN_INFO "%s++ %d\n", __func__, on);
 	if (on) {
 		if (test_bit(IS_PWR_ST_POWERON, &is_dev->power)) {
 			err("FIMC-IS was already power on state!!\n");
@@ -343,28 +373,52 @@ int fimc_is_s_power(struct v4l2_subdev *sd, int on)
 		}
 #if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
 		/* lock bus frequency */
-		dev_lock(is_dev->bus_dev, dev, BUS_LOCK_FREQ_L0);
+		dev_lock(is_dev->bus_dev, dev, BUS_LOCK_FREQ_L1);
 #endif
 		fimc_is_hw_set_low_poweroff(is_dev, false);
 		ret = pm_runtime_get_sync(dev);
 		set_bit(IS_ST_A5_PWR_ON, &is_dev->state);
 	} else {
+		if (test_bit(IS_PWR_ST_POWEROFF, &is_dev->power)) {
+			err("FIMC-IS was already power off state!!\n");
+			err("Close sensor - %d\n", is_dev->sensor.id);
+			fimc_is_hw_close_sensor(is_dev, 0);
+			printk(KERN_INFO "%s Wait close sensor interrupt\n", __func__);
+			ret = wait_event_timeout(is_dev->irq_queue1,
+				!test_bit(IS_ST_OPEN_SENSOR,
+				&is_dev->power), FIMC_IS_SHUTDOWN_TIMEOUT);
+			if (!ret) {
+				err("Timeout-close sensor:%s\n", __func__);
+				fimc_is_hw_set_low_poweroff(is_dev, true);
+			} else {
+				is_dev->p_region_index1 = 0;
+				is_dev->p_region_index2 = 0;
+				atomic_set(&is_dev->p_region_num, 0);
+				printk(KERN_INFO "%s already power off return\n", __func__);
+				return ret;
+			}
+		}
+
+		printk(KERN_INFO "%s sub ip power off ++\n", __func__);
+
 		if (!test_bit(IS_PWR_SUB_IP_POWER_OFF, &is_dev->power)) {
+			printk(KERN_INFO "%s Sub ip is alive\n", __func__);
 			fimc_is_hw_subip_poweroff(is_dev);
+			printk(KERN_INFO "%s Wait Sub ip power off\n", __func__);
 			ret = wait_event_timeout(is_dev->irq_queue1,
 				test_bit(IS_PWR_SUB_IP_POWER_OFF,
 				&is_dev->power), FIMC_IS_SHUTDOWN_TIMEOUT);
 			if (!ret) {
-				err("wait timeout : %s\n", __func__);
+				err("%s wait timeout\n", __func__);
 				fimc_is_hw_set_low_poweroff(is_dev, true);
 			}
-		}
-		if (test_bit(IS_PWR_ST_POWEROFF, &is_dev->power)) {
-			err("FIMC-IS was already power off state!!\n");
-			return ret;
-		}
+		} else
+			printk(KERN_INFO "%s sub ip was already power off state!!\n", __func__);
+
+		printk(KERN_INFO "%s sub ip power off --\n", __func__);
+
 		fimc_is_hw_a5_power(is_dev, 0);
-		dbg("A5 power off\n");
+		printk(KERN_INFO "A5 power off\n");
 		ret = pm_runtime_put_sync(dev);
 
 		is_dev->sensor.id = 0;
@@ -379,6 +433,8 @@ int fimc_is_s_power(struct v4l2_subdev *sd, int on)
 		is_dev->af.mode = IS_FOCUS_MODE_IDLE;
 		set_bit(IS_PWR_ST_POWEROFF, &is_dev->power);
 	}
+	printk(KERN_INFO "%s --\n", __func__);
+
 	return ret;
 }
 
@@ -401,6 +457,7 @@ static int fimc_is_init_set(struct v4l2_subdev *sd, u32 val)
 		FIMC_IS_SHUTDOWN_TIMEOUT);
 	if (!ret) {
 		err("wait timeout - open sensor\n");
+		fimc_is_hw_set_low_poweroff(dev, true);
 		return -EINVAL;
 	}
 	/* Init sequence 2: Load setfile */
@@ -416,7 +473,16 @@ static int fimc_is_init_set(struct v4l2_subdev *sd, u32 val)
 		return -EINVAL;
 	}
 	dbg("v4l2 : load setfile\n");
+	if (dev->setfile.state && (dev->mem.setfile_ref_base > 0)) {
+		memcpy((void *)phys_to_virt(dev->mem.base + dev->setfile.base),
+			(void *)phys_to_virt(dev->mem.setfile_ref_base),
+			dev->setfile.size);
+		fimc_is_mem_cache_clean(
+			(void *)phys_to_virt(dev->mem.base + dev->setfile.base),
+			dev->setfile.size + 1);
+	} else {
 		fimc_is_load_setfile(dev);
+	}
 	clear_bit(IS_ST_SETFILE_LOADED, &dev->state);
 	fimc_is_hw_load_setfile(dev);
 	ret = wait_event_timeout(dev->irq_queue1,
@@ -552,7 +618,7 @@ static int fimc_is_reset(struct v4l2_subdev *sd, u32 val)
 	/* Restart */
 #if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
 	/* lock bus frequency */
-	dev_lock(is_dev->bus_dev, dev, BUS_LOCK_FREQ_L0);
+	dev_lock(is_dev->bus_dev, dev, BUS_LOCK_FREQ_L1);
 #endif
 	fimc_is_hw_set_low_poweroff(is_dev, false);
 	ret = pm_runtime_get_sync(dev);
@@ -750,6 +816,16 @@ static int fimc_is_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	case V4L2_CID_IS_FW_DEBUG_REGION_ADDR:
 		ctrl->value = dev->mem.base + FIMC_IS_DEBUG_REGION_ADDR;
 		break;
+#if defined(CONFIG_SLP)
+#define FRONT_CAM_STANDARD_REVISION	0x0b
+	case V4L2_CID_PHYSICAL_ROTATION:
+		if (system_rev > FRONT_CAM_STANDARD_REVISION || \
+			system_rev == 0x04 || system_rev == 0x06)
+			ctrl->value = IS_ROTATION_270;
+		else
+			ctrl->value = IS_ROTATION_90;
+		break;
+#endif
 	default:
 		return -EINVAL;
 	}
@@ -2182,7 +2258,15 @@ static int fimc_is_v4l2_isp_effect_legacy(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return 0;
+		}
 	}
 	return ret;
 }
@@ -2293,7 +2377,15 @@ static int fimc_is_v4l2_awb_mode_legacy(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return 0;
+		}
 	}
 	return ret;
 }
@@ -2304,6 +2396,12 @@ static int fimc_is_v4l2_isp_contrast(struct fimc_is_dev *dev, int value)
 	switch (value) {
 	case IS_CONTRAST_AUTO:
 		IS_ISP_SET_PARAM_ADJUST_CMD(dev, ISP_ADJUST_COMMAND_AUTO);
+		IS_ISP_SET_PARAM_ADJUST_CONTRAST(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_SATURATION(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_SHARPNESS(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
 		break;
 	case IS_CONTRAST_MINUS_2:
 		IS_ISP_SET_PARAM_ADJUST_CMD(dev,
@@ -3589,30 +3687,6 @@ static int fimc_is_v4l2_mode_change(struct fimc_is_dev *dev, int value)
 		err("Not init done state!!\n");
 		return -EINVAL;
 	}
-	/* Set default value between still and video mode change */
-	/* This is optional part */
-	if ((dev->scenario_id + value) == 1) {
-		IS_ISP_SET_PARAM_AWB_CMD(dev, ISP_AWB_COMMAND_AUTO);
-		IS_ISP_SET_PARAM_AWB_ILLUMINATION(dev, 0);
-		IS_SET_PARAM_BIT(dev, PARAM_ISP_AWB);
-		IS_INC_PARAM_NUM(dev);
-		IS_ISP_SET_PARAM_ADJUST_CMD(dev,
-					ISP_ADJUST_COMMAND_MANUAL_EXPOSURE);
-		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
-		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
-		IS_INC_PARAM_NUM(dev);
-		fimc_is_mem_cache_clean((void *)dev->is_p_region,
-							IS_PARAM_SIZE);
-		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
-		fimc_is_hw_set_param(dev);
-		ret = wait_event_timeout(dev->irq_queue1,
-				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
-					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
-		if (!ret) {
-			err("wait timeout : %s\n", __func__);
-			return -EINVAL;
-		}
-	}
 	clear_bit(IS_ST_CHANGE_MODE, &dev->state);
 	fimc_is_hw_change_mode(dev, value);
 	ret = wait_event_timeout(dev->irq_queue1,
@@ -3639,6 +3713,30 @@ static int fimc_is_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 		ret = fimc_is_v4l2_mode_change(dev, ctrl->value);
 		break;
 	case V4L2_CID_IS_S_FORMAT_SCENARIO:
+		/* Set default value between still and video mode change */
+		/* This is optional part */
+		if ((dev->scenario_id + ctrl->value) == 1) {
+			IS_ISP_SET_PARAM_AWB_CMD(dev, ISP_AWB_COMMAND_AUTO);
+			IS_ISP_SET_PARAM_AWB_ILLUMINATION(dev, 0);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_AWB);
+			IS_INC_PARAM_NUM(dev);
+			IS_ISP_SET_PARAM_ADJUST_CMD(dev,
+					ISP_ADJUST_COMMAND_MANUAL_EXPOSURE);
+			IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
+			IS_INC_PARAM_NUM(dev);
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
+								IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+			if (!ret) {
+				err("wait timeout : %s\n", __func__);
+				return -EINVAL;
+			}
+		}
 		switch (ctrl->value) {
 		case IS_MODE_PREVIEW_STILL:
 			dev->scenario_id = ISS_PREVIEW_STILL;
@@ -3865,8 +3963,8 @@ static int fimc_is_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 		break;
 	case V4L2_CID_CAMERA_VT_MODE:
 		dev->setfile.sub_index = ctrl->value;
-		if (ctrl->value == 1)
-			printk(KERN_INFO "VT mode is selected\n");
+		printk(KERN_INFO "VT mode(%d) is selected\n",
+						dev->setfile.sub_index);
 		break;
 	case V4L2_CID_CAMERA_VGA_BLUR:
 		break;
@@ -4040,6 +4138,9 @@ static int fimc_is_g_ext_ctrls_handler(struct fimc_is_dev *dev,
 	case V4L2_CID_IS_FD_GET_NEXT:
 		dev->fd_header.offset++;
 		break;
+	case V4L2_CID_CAM_SENSOR_FW_VER:
+		strcpy(ctrl->string, dev->fw.fw_version);
+		break;
 	default:
 		return 255;
 		break;
@@ -4057,7 +4158,7 @@ static int fimc_is_g_ext_ctrls(struct v4l2_subdev *sd,
 
 	spin_lock_irqsave(&dev->slock, flags);
 	ctrl = ctrls->controls;
-	if (!ctrls->ctrl_class == V4L2_CTRL_CLASS_CAMERA)
+	if (ctrls->ctrl_class != V4L2_CTRL_CLASS_CAMERA)
 		return -EINVAL;
 
 	fimc_is_mem_cache_inv((void *)IS_FACE,
@@ -4138,7 +4239,7 @@ static int fimc_is_s_ext_ctrls(struct v4l2_subdev *sd,
 	int i, ret = 0;
 
 	dbg("S_EXT_CTRLS - %d\n", ctrls->count);
-	if (!ctrls->ctrl_class == V4L2_CTRL_CLASS_CAMERA)
+	if (ctrls->ctrl_class != V4L2_CTRL_CLASS_CAMERA)
 		return -EINVAL;
 
 	dev->h2i_cmd.cmd_type = 0;
