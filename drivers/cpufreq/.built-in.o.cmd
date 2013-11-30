@@ -1,0 +1,1 @@
+cmd_drivers/cpufreq/built-in.o :=  arm-gnueabi-ld -EL    -r -o drivers/cpufreq/built-in.o drivers/cpufreq/cpufreq.o drivers/cpufreq/cpufreq_stats.o drivers/cpufreq/cpufreq_performance.o drivers/cpufreq/cpufreq_interactive.o drivers/cpufreq/cpufreq_adaptive.o drivers/cpufreq/cpufreq_pegasusq.o drivers/cpufreq/freq_table.o drivers/cpufreq/dvfs_monitor.o 
