@@ -303,8 +303,8 @@ unsigned long shrink_slab(struct shrink_control *shrink,
 			total_scan = max_pass * 2;
 
 //		trace_mm_shrink_slab_start(shrinker, shrink, nr,
-	//				nr_pages_scanned, lru_pages,
-		//			max_pass, delta, total_scan);
+//					nr_pages_scanned, lru_pages,
+//					max_pass, delta, total_scan);
 
 		while (total_scan >= SHRINK_BATCH) {
 			long this_scan = SHRINK_BATCH;
@@ -335,7 +335,7 @@ unsigned long shrink_slab(struct shrink_control *shrink,
 				break;
 		} while (cmpxchg(&shrinker->nr, nr, new_nr) != nr);
 
-//		trace_mm_shrink_slab_end(shrinker, shrink_ret, nr, new_nr);
+		//trace_mm_shrink_slab_end(shrinker, shrink_ret, nr, new_nr);
 	}
 	up_read(&shrinker_rwsem);
 out:
