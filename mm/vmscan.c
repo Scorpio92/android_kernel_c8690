@@ -302,9 +302,9 @@ unsigned long shrink_slab(struct shrink_control *shrink,
 		if (total_scan > max_pass * 2)
 			total_scan = max_pass * 2;
 
-//		trace_mm_shrink_slab_start(shrinker, shrink, nr,
-//					nr_pages_scanned, lru_pages,
-//					max_pass, delta, total_scan);
+		//trace_mm_shrink_slab_start(shrinker, shrink, nr,
+					//nr_pages_scanned, lru_pages,
+					//max_pass, delta, total_scan);
 
 		while (total_scan >= SHRINK_BATCH) {
 			long this_scan = SHRINK_BATCH;
