@@ -51,7 +51,7 @@ struct partial_page {
 struct splice_pipe_desc {
 	struct page **pages;		/* page map */
 	struct partial_page *partial;	/* pages[] may not be contig */
-	int nr_pages;			/* number of populated pages in map */
+	int nr_pages;			/* number of pages in map */
 	unsigned int nr_pages_max;	/* pages[] & partial[] arrays size */
 	unsigned int flags;		/* splice flags */
 	const struct pipe_buf_operations *ops;/* ops associated with output pipe */

@@ -355,7 +355,6 @@ int enter_state(suspend_state_t state)
 
 	pr_debug("PM: Entering %s sleep\n", pm_states[state]);
 	pm_restrict_gfp_mask();
-
 	suspending_flag = 1;
 	error = suspend_devices_and_enter(state);
 	suspended_flag = 1 ;

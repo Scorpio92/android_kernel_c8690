@@ -7185,6 +7185,7 @@ int s3c_gpio_slp_setpull_updown(unsigned int pin, unsigned int config)
 
 	return 0;
 }
+
 //Cellon add start, Jacob, 2012/08/07, for GPIO init setting issue
 struct gpio_init_data {
 	uint num;
