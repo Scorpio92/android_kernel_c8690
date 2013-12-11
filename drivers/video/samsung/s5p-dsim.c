@@ -158,6 +158,7 @@ extern void lcd_off(void);
 
 static LIST_HEAD(lcd_info_list);
 static DEFINE_MUTEX(mipi_lock);
+static struct dsim_global *g_dsim;
 
 static void s5p_dsim_set_clock(unsigned int dsim_base,
 	unsigned char byte_clk_sel, unsigned char enable);
@@ -1418,6 +1419,13 @@ int s5p_dsim_resume(struct platform_device *pdev)
 #define s5p_dsim_resume NULL
 #endif
 #endif
+
+u32 read_dsim_register(u32 num)
+{
+	struct dsim_global *dsim = g_dsim;
+
+	return readl(dsim->reg_base + (num*4));
+}
 
 static int s5p_dsim_probe(struct platform_device *pdev)
 {

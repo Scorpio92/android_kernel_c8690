@@ -525,6 +525,23 @@ int s3cfb_win_map_off(struct s3cfb_global *ctrl, int id)
 	return 0;
 }
 
+int s3cfb_set_window_protect(struct s3cfb_global *ctrl, int id, bool protect)
+{
+	struct s3c_platform_fb *pdata = to_fb_plat(ctrl->dev);
+	u32 shw;
+
+	if ((pdata->hw_ver == 0x62) || (pdata->hw_ver == 0x70)) {
+		shw = readl(ctrl->regs + S3C_WINSHMAP);
+		if (protect)
+			shw |= S3C_WINSHMAP_PROTECT(id);
+		else
+			shw &= ~(S3C_WINSHMAP_PROTECT(id));
+		writel(shw, ctrl->regs + S3C_WINSHMAP);
+	}
+
+	return 0;
+}
+
 int s3cfb_set_window_control(struct s3cfb_global *ctrl, int id)
 {
 	struct s3c_platform_fb *pdata = to_fb_plat(ctrl->dev);
@@ -636,6 +653,17 @@ int s3cfb_set_window_control(struct s3cfb_global *ctrl, int id)
 	return 0;
 }
 
+int s3cfb_get_win_cur_buf_addr(struct s3cfb_global *ctrl, int id)
+{
+	dma_addr_t start_addr = 0;
+
+	start_addr = readl(ctrl->regs + S3C_VIDADDR_START0(id) + S3C_SHD_WIN_BASE);
+
+	dev_dbg(ctrl->dev, "[fb%d] start_addr: 0x%08x\n", id, start_addr);
+
+	return start_addr;
+}
+
 int s3cfb_set_buffer_address(struct s3cfb_global *ctrl, int id)
 {
 	struct fb_fix_screeninfo *fix = &ctrl->fb[id]->fix;
@@ -676,6 +704,18 @@ int s3cfb_set_buffer_address(struct s3cfb_global *ctrl, int id)
 int s3cfb_set_alpha_value(struct s3cfb_global *ctrl, int value)
 {
 	writel(value, ctrl->regs + S3C_BLENDCON);
+
+	return 0;
+}
+
+int s3cfb_set_alpha_value_width(struct s3cfb_global *ctrl, int id)
+{
+	struct fb_var_screeninfo *var = &ctrl->fb[id]->var;
+
+	if (var->bits_per_pixel == 32 && var->transp.length > 4)
+		writel(1, ctrl->regs + S3C_BLENDCON);
+	else
+		writel(0, ctrl->regs + S3C_BLENDCON);
 
 	return 0;
 }
