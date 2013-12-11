@@ -119,13 +119,33 @@ struct s3cfb_lcd_polarity {
 	int inv_vden;
 };
 
+#ifdef CONFIG_FB_S5P_MIPI_DSIM
+/* for CPU Interface */
+struct s3cfb_cpu_timing {
+	unsigned int	cs_setup;
+	unsigned int	wr_setup;
+	unsigned int	wr_act;
+	unsigned int	wr_hold;
+};
+#endif
+
 struct s3cfb_lcd {
+#ifdef CONFIG_FB_S5P_MIPI_DSIM
+	char	*name;
+#endif
 	int	width;
 	int	height;
+	int	p_width;
+	int	p_height;
 	int	bpp;
 	int	freq;
+	int	freq_limit;
+	int	vclk;
 	struct	s3cfb_lcd_timing timing;
 	struct	s3cfb_lcd_polarity polarity;
+#ifdef CONFIG_FB_S5P_MIPI_DSIM
+	struct	s3cfb_cpu_timing cpu_timing;
+#endif
 	void	(*init_ldi)(void);
 	void	(*deinit_ldi)(void);
 };
