@@ -1140,16 +1140,18 @@ int s3cfb_cursor(struct fb_info *fb, struct fb_cursor *cursor)
 	return 0;
 }
 
+#if !defined(CONFIG_FB_S5P_VSYNC_THREAD)
 int s3cfb_wait_for_vsync(struct s3cfb_global *fbdev)
 {
 	dev_dbg(fbdev->dev, "waiting for VSYNC interrupt\n");
-	//s3p_dsim_clock_lp();	//fly 
+
 	sleep_on_timeout(&fbdev->wq, HZ / 10);
 
 	dev_dbg(fbdev->dev, "got a VSYNC interrupt\n");
 
 	return 0;
 }
+#endif
 
 int s3cfb_ioctl(struct fb_info *fb, unsigned int cmd, unsigned long arg)
 {
@@ -1176,7 +1178,34 @@ int s3cfb_ioctl(struct fb_info *fb, unsigned int cmd, unsigned long arg)
 
 	switch (cmd) {
 	case FBIO_WAITFORVSYNC:
+		if (fbdev->regs == 0)
+			return 0;
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+#ifdef CONFIG_CPU_EXYNOS4412
+		if (!fbdev->regs)
+			return ret;
+#endif
+#if !defined(CONFIG_FB_S5P_VSYNC_THREAD)
+		/* Enable Vsync */
+		s3cfb_set_global_interrupt(fbdev, 1);
+		s3cfb_set_vsync_interrupt(fbdev, 1);
+#endif
+#endif
+		/* Wait for Vsync */
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+		s3cfb_wait_for_vsync(fbdev, HZ/10);
+#else
 		s3cfb_wait_for_vsync(fbdev);
+#endif
+		if (fbdev->regs == 0)
+			return 0;
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+#if !defined(CONFIG_FB_S5P_VSYNC_THREAD)
+		/* Disable Vsync */
+		s3cfb_set_global_interrupt(fbdev, 0);
+		s3cfb_set_vsync_interrupt(fbdev, 0);
+#endif
+#endif
 		break;
 
 	case S3CFB_WIN_POSITION:

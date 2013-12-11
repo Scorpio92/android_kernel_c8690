@@ -121,6 +121,38 @@ int s3cfb_vsync_status_check(void)
 		return 0;
 }
 
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+static void s3cfb_activate_vsync(struct s3cfb_global *fbdev)
+{
+	int prev_refcount;
+
+	mutex_lock(&fbdev->vsync_info.irq_lock);
+	prev_refcount = fbdev->vsync_info.irq_refcount++;
+	if (!prev_refcount) {
+		s3cfb_set_global_interrupt(fbdev, 1);
+		s3cfb_set_vsync_interrupt(fbdev, 1);
+	}
+
+	mutex_unlock(&fbdev->vsync_info.irq_lock);
+}
+
+static void s3cfb_deactivate_vsync(struct s3cfb_global *fbdev)
+{
+	int new_refcount;
+
+	mutex_lock(&fbdev->vsync_info.irq_lock);
+
+	new_refcount = --fbdev->vsync_info.irq_refcount;
+	WARN_ON(new_refcount < 0);
+	if (!new_refcount) {
+		s3cfb_set_global_interrupt(fbdev, 0);
+		s3cfb_set_vsync_interrupt(fbdev, 0);
+	}
+
+	mutex_unlock(&fbdev->vsync_info.irq_lock);
+}
+#endif
+
 static irqreturn_t s3cfb_irq_frame(int irq, void *dev_id)
 {
 	struct s3cfb_global *fbdev[2];
@@ -147,6 +179,57 @@ static irqreturn_t s3cfb_irq_fifo(int irq, void *dev_id)
 		s3cfb_clear_interrupt(fbdev[0]);
 
 	return IRQ_HANDLED;
+}
+#endif
+
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+int s3cfb_set_vsync_int(struct fb_info *info, bool active)
+{
+	struct s3cfb_global *fbdev = fbfimd->fbdev[0];
+	bool prev_active = fbdev->vsync_info.active;
+
+	fbdev->vsync_info.active = active;
+
+	if (active && !prev_active)
+		s3cfb_activate_vsync(fbdev);
+	else if (!active && prev_active)
+		s3cfb_deactivate_vsync(fbdev);
+
+	return 0;
+}
+
+/**
+ * s3cfb_wait_for_vsync() - sleep until next VSYNC interrupt or timeout
+ * @sfb: main hardware state
+ * @timeout: timeout in msecs, or 0 to wait indefinitely.
+ */
+int s3cfb_wait_for_vsync(struct s3cfb_global *fbdev, u32 timeout)
+{
+	ktime_t timestamp;
+	int ret;
+
+	pm_runtime_get_sync(fbdev->dev);
+
+	timestamp = fbdev->vsync_info.timestamp;
+	s3cfb_activate_vsync(fbdev);
+	if (timeout) {
+		ret = wait_event_interruptible_timeout(fbdev->vsync_info.wait,
+						!ktime_equal(timestamp,
+						fbdev->vsync_info.timestamp),
+						msecs_to_jiffies(timeout));
+	} else {
+		ret = wait_event_interruptible(fbdev->vsync_info.wait,
+						!ktime_equal(timestamp,
+						fbdev->vsync_info.timestamp));
+	}
+	s3cfb_deactivate_vsync(fbdev);
+
+	pm_runtime_put_sync(fbdev->dev);
+
+	if (timeout && ret == 0)
+		return -ETIMEDOUT;
+
+	return 0;
 }
 #endif
 
