@@ -170,7 +170,7 @@ static void s3cfb_deactivate_vsync(struct s3cfb_global *fbdev)
 }
 #endif
 
-static irqreturn_t s3cfb_irq_frame(int irq, void *dev_id) //!!!
+static irqreturn_t s3cfb_irq_frame(int irq, void *dev_id)
 {
 	struct s3cfb_global *fbdev[2];
 	fbdev[0] = fbfimd->fbdev[0];
@@ -487,7 +487,7 @@ static void s3c_fb_update_regs_handler(struct kthread_work *work)
 	}
 }
 
-static int s3cfb_probe(struct platform_device *pdev) ///!!!
+static int s3cfb_probe(struct platform_device *pdev) 
 {
 	struct s3c_platform_fb *pdata = NULL;
 	struct resource *res = NULL;
@@ -500,6 +500,24 @@ static int s3cfb_probe(struct platform_device *pdev) ///!!!
 	pm_runtime_enable(&pdev->dev);
 	/* enable the power domain */
 	pm_runtime_get_sync(&pdev->dev);
+#endif
+#ifndef CONFIG_TC4_EVT
+	lcd_regulator = regulator_get(NULL, "vdd33_lcd");  
+	lcd_regulator_ldo13 = regulator_get(NULL, "vddioperi_18"); 
+
+	if (IS_ERR(lcd_regulator_ldo13)) {
+		printk("%s: failed to get %s\n", __func__, "vddioperi_18");
+		ret = -ENODEV;
+		goto err_regulator_ldo13;
+	}
+		
+	if (IS_ERR(lcd_regulator)) {
+		printk("%s: failed to get %s\n", __func__, "vdd33_lcd");
+		ret = -ENODEV;
+		goto err_regulator;
+	}
+	regulator_enable(lcd_regulator_ldo13); 	//jacob
+	regulator_enable(lcd_regulator); 	//yulu
 #endif
 
 	fbfimd = kzalloc(sizeof(struct s3cfb_fimd_desc), GFP_KERNEL);
@@ -725,6 +743,17 @@ static int s3cfb_probe(struct platform_device *pdev) ///!!!
 
 	return 0;
 
+#ifndef CONFIG_TC4_EVT
+err_regulator:
+	regulator_put(lcd_regulator);	//yulu
+	lcd_regulator = NULL;	
+#endif
+#ifndef CONFIG_TC4_EVT
+err_regulator_ldo13:
+	regulator_put(lcd_regulator_ldo13);	//jacob
+	lcd_regulator_ldo13 = NULL;
+#endif
+
 err3:
 	for (i = 0; i < FIMD_MAX; i++)
 		free_irq(fbdev[i]->irq, fbdev[i]);
@@ -747,7 +776,7 @@ err_fimd_desc:
 }
 
 
-static int s3cfb_remove(struct platform_device *pdev)
+static int s3cfb_remove(struct platform_device *pdev)//!!!
 {
 	struct s3c_platform_fb *pdata = to_fb_plat(&pdev->dev);
 	struct s3cfb_window *win;
