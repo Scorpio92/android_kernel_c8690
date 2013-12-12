@@ -120,13 +120,13 @@ static void __dma_free_buffer(struct page *page, size_t size)
 
 #define CONSISTENT_OFFSET(x)	(((unsigned long)(x) - CONSISTENT_BASE) >> PAGE_SHIFT)
 #define CONSISTENT_PTE_INDEX(x) (((unsigned long)(x) - CONSISTENT_BASE) >> PGDIR_SHIFT)
-#define NUM_CONSISTENT_PTES (CONSISTENT_DMA_SIZE >> PGDIR_SHIFT)
+// #define NUM_CONSISTENT_PTES (CONSISTENT_DMA_SIZE >> PGDIR_SHIFT)
 
 /*
  * These are the page tables (2MB each) covering uncached,
  * DMA consistent allocations
  */
-static pte_t *consistent_pte[NUM_CONSISTENT_PTES];
+// static pte_t *consistent_pte[NUM_CONSISTENT_PTES];
 
 #include "vmregion.h"
 
@@ -146,6 +146,7 @@ static struct arm_vmregion_head consistent_head = {
  */
 static int __init consistent_init(void)
 {
+#if 0
 	int ret = 0;
 	pgd_t *pgd;
 	pud_t *pud;
@@ -154,9 +155,6 @@ static int __init consistent_init(void)
 	int i = 0;
 	u32 base = CONSISTENT_BASE;
 
-	return 0;
-
-#if 0
 	do {
 		pgd = pgd_offset(&init_mm, base);
 
@@ -188,6 +186,7 @@ static int __init consistent_init(void)
 
 	return ret;
 #endif
+	return 0;
 }
 core_initcall(consistent_init);
 
@@ -286,6 +285,7 @@ void __init dma_contiguous_remap(void)
 	}
 }
 
+#if 0
 static void *
 __dma_alloc_remap(struct page *page, size_t size, gfp_t gfp, pgprot_t prot)
 {
@@ -390,6 +390,7 @@ static void __dma_free_remap(void *cpu_addr, size_t size)
 
 	arm_vmregion_free(&consistent_head, c);
 }
+#endif
 
 static int __dma_update_pte(pte_t *pte, pgtable_t token, unsigned long addr,
 			    void *data)
@@ -411,6 +412,7 @@ static void __dma_remap(struct page *page, size_t size, pgprot_t prot)
 	flush_tlb_kernel_range(start, end);
 }
 
+#if 0
 static void *__alloc_remap_buffer(struct device *dev, size_t size, gfp_t gfp,
 				 pgprot_t prot, struct page **ret_page)
 {
@@ -429,6 +431,7 @@ static void *__alloc_remap_buffer(struct device *dev, size_t size, gfp_t gfp,
 	*ret_page = page;
 	return ptr;
 }
+#endif
 
 static void *__alloc_from_pool(struct device *dev, size_t size,
 			       struct page **ret_page)
@@ -512,12 +515,12 @@ static void __free_from_contiguous(struct device *dev, struct page *page,
 
 #define nommu() 1
 
-#define __alloc_remap_buffer(dev, size, gfp, prot, ret)	NULL
+/* #define __alloc_remap_buffer(dev, size, gfp, prot, ret)	NULL */
 #define __alloc_from_pool(dev, size, ret_page)		NULL
 #define __alloc_from_contiguous(dev, size, prot, ret)	NULL
 #define __free_from_pool(cpu_addr, size)		0
 #define __free_from_contiguous(dev, page, size)		do { } while (0)
-#define __dma_free_remap(cpu_addr, size)		do { } while (0)
+/* #define __dma_free_remap(cpu_addr, size)		do { } while (0) */
 
 #endif	/* CONFIG_MMU */
 
