@@ -339,8 +339,8 @@ deps_config := \
 	drivers/media/video/samsung/mali/Kconfig \
 	drivers/media/video/samsung/mfc5x/Kconfig \
 	drivers/media/video/samsung/tvout/Kconfig \
-	drivers/media/video/samsung/fimc/Kconfig \
 	drivers/media/video/samsung/fimc_external_isp/Kconfig \
+	drivers/media/video/samsung/fimc/Kconfig \
 	drivers/media/video/samsung/Kconfig \
 	drivers/media/video/pwc/Kconfig \
 	drivers/media/video/sn9c102/Kconfig \
@@ -404,6 +404,7 @@ deps_config := \
 	drivers/char/hw_random/Kconfig \
 	drivers/char/ipmi/Kconfig \
 	drivers/tty/hvc/Kconfig \
+	drivers/char/diag/Kconfig \
 	drivers/tty/serial/Kconfig \
 	drivers/tty/Kconfig \
 	drivers/char/Kconfig \
@@ -714,7 +715,7 @@ deps_config := \
 include/config/auto.conf: \
 	$(deps_config)
 
-ifneq "$(KERNELVERSION)" "3.0.31"
+ifneq "$(KERNELVERSION)" "3.0.101"
 include/config/auto.conf: FORCE
 endif
 ifneq "$(ARCH)" "arm"

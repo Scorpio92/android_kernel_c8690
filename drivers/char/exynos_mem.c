@@ -18,6 +18,7 @@
 #include <linux/uaccess.h>
 #include <linux/highmem.h>
 #include <linux/dma-mapping.h>
+#include <linux/cma.h>
 #include <asm/cacheflush.h>
 
 #include <plat/cpu.h>
@@ -27,97 +28,9 @@
 #define L2_FLUSH_ALL	SZ_1M
 #define L1_FLUSH_ALL	SZ_64K
 
-/* limit the exynos-mem mapping region, to fix exynos4 memory security issue */
-#include <linux/cma.h>
-
-struct exynos_mem_region {
-	const char * name;
-	dma_addr_t start;
-	dma_addr_t end;
-	size_t  size;
-};
-
-static bool gIsExynosMemInit = false;
-
-static struct exynos_mem_region available_regions[] = {
-	{
-		.name = "s3c-fimc.0",
-		.size = 0,
-	},
-	{
-		.name = "s3c-fimc.1",
-		.size = 0,
-	},
-	{
-		.name = "s3c-fimc.2",
-		.size = 0,
-	},
-	{
-		.name = "s3c-fimc.3",
-		.size = 0,
-	},
-	{
-		.name = NULL,
-	},
-};
-
-static void init_exynos_mem_region(struct exynos_mem_region *reserved_regions)
-{
-	struct exynos_mem_region *mem_reg;
-	struct device dev;
-	struct cma_info mem_info;
-	int err;
-
-	if(gIsExynosMemInit)
-		return;
-
-	for(mem_reg = reserved_regions; mem_reg->name != NULL; mem_reg++) {
-		dev.init_name = mem_reg->name;
-		err = cma_info(&mem_info, &dev, 0);
-		if (err) {
-			printk(KERN_ERR "%s: get dev: %s cma info failed\n", __func__, dev.init_name);
-			mem_reg->start = 0;
-			mem_reg->end = 0;
-			mem_reg->size = 0;
-		} else {
-			mem_reg->start = mem_info.lower_bound;
-			mem_reg->end = mem_info.upper_bound;
-			mem_reg->size = mem_info.total_size;
-			printk(KERN_DEBUG "%s: get dev: %s cma, start_addr:0x%x, end_addr:0x%x, size:%d\n",
-				 __func__, mem_reg->name, mem_reg->start, mem_reg->end, mem_reg->size);
-		}
-	}
-	gIsExynosMemInit = true;
-}
-
-static int is_exynos_mem_available(phys_addr_t start, size_t length)
-{
-	struct exynos_mem_region *mem_reg;
-	phys_addr_t end = start + length;
-	int available = -EINVAL;
-
-	printk(KERN_DEBUG "%s, start 0x%x, end 0x%x, size:%d \n",
-		__func__, start, end, length);
-
-	if(!gIsExynosMemInit)
-		init_exynos_mem_region(available_regions);
-
-	for(mem_reg = available_regions; mem_reg->name != NULL; mem_reg++) {
-		if(mem_reg->size == 0)
-			continue;
-		if (start >= mem_reg->start &&
-		    end <= mem_reg->end) {
-			available = 0;
-			break;
-		}
-	}
-
-	return available;
-}
-/* end */
-
 struct exynos_mem {
 	bool cacheable;
+	unsigned int  phybase;
 };
 
 int exynos_mem_open(struct inode *inode, struct file *filp)
@@ -171,14 +84,13 @@ static void cache_maint_phys(phys_addr_t start, size_t length, enum cacheop op)
 	size_t left = length;
 	phys_addr_t begin = start;
 
-	/* limit the exynos-mem mapping region, to fix exynos4 memory security issue */
-	if(is_exynos_mem_available(start, length)) {
-		printk(KERN_ERR "%s, invailid paddr:0x%x \n", __func__, start);
+	if (!cma_is_registered_region(start, length)) {
+		pr_err("[%s] handling non-cma region (%#x@%#x) is prohibited\n",
+					__func__, length, start);
 		return;
 	}
-	/* end */
 
-	if (!soc_is_exynos5250()) {
+	if (!soc_is_exynos5250() && !soc_is_exynos5210()) {
 		if (length > (size_t) L1_FLUSH_ALL) {
 			flush_cache_all();
 			smp_call_function(
@@ -235,6 +147,28 @@ outer_cache_ops:
 	}
 }
 
+#if 0
+static void exynos_mem_paddr_cache_clean(dma_addr_t start, size_t length)
+{
+	if (length > (size_t) L2_FLUSH_ALL) {
+		flush_cache_all();		/* L1 */
+		smp_call_function((smp_call_func_t)__cpuc_flush_kern_all, NULL, 1);
+		outer_clean_all();		/* L2 */
+	} else if (length > (size_t) L1_FLUSH_ALL) {
+		dma_addr_t end = start + length - 1;
+
+		flush_cache_all();		/* L1 */
+		smp_call_function((smp_call_func_t)__cpuc_flush_kern_all, NULL, 1);
+		outer_clean_range(start, end);  /* L2 */
+	} else {
+		dma_addr_t end = start + length - 1;
+
+		dmac_flush_range(phys_to_virt(start), phys_to_virt(end));
+		outer_clean_range(start, end);	/* L2 */
+	}
+}
+#endif
+
 long exynos_mem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -279,6 +213,19 @@ long exynos_mem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		cache_maint_phys(range.start, range.length, EM_CLEAN);
 		break;
 	}
+	case EXYNOS_MEM_SET_PHYADDR:
+	{
+		struct exynos_mem *mem = filp->private_data;
+		int phyaddr;
+		if (get_user(phyaddr, (u32 __user *)arg)) {
+			pr_err("[%s:%d] err: EXYNOS_MEM_SET_PHYADDR\n",
+				__func__, __LINE__);
+			return -EFAULT;
+		}
+		mem->phybase = phyaddr >> PAGE_SHIFT;
+
+		break;
+	}
 
 	default:
 		pr_err("[%s:%d] error command\n", __func__, __LINE__);
@@ -307,27 +254,26 @@ int exynos_mem_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	struct exynos_mem *mem = (struct exynos_mem *)filp->private_data;
 	bool cacheable = mem->cacheable;
-	dma_addr_t start = vma->vm_pgoff << PAGE_SHIFT;
-	u32 pfn = vma->vm_pgoff;
+	dma_addr_t start = 0;
+	u32 pfn = 0;
 	u32 size = vma->vm_end - vma->vm_start;
 
-	/* TODO: currently lowmem is only avaiable */
-	if ((phys_to_virt(start) < (void *)PAGE_OFFSET) ||
-	    (phys_to_virt(start) >= high_memory)) {
-		pr_err("[%s] invalid paddr(0x%08x)\n", __func__, start);
-		return -EINVAL;
+	if (vma->vm_pgoff) {
+		start = vma->vm_pgoff << PAGE_SHIFT;
+		pfn = vma->vm_pgoff;
+	} else {
+		start = mem->phybase << PAGE_SHIFT;
+		pfn = mem->phybase;
 	}
 
-	/* limit the exynos-mem mapping region, to fix exynos4 memory security issue */
-	if(is_exynos_mem_available(start, size))
-	{
-		pr_err("[%s] invalid paddr(0x%08x)\n", __func__, start);
+	if (!cma_is_registered_region(start, size)) {
+		pr_err("[%s] handling non-cma region (%#x@%#x) is prohibited\n",
+						__func__, size, start);
 		return -EINVAL;
 	}
-	/* end */
 
 	if (!cacheable)
-		vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+		vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
 	vma->vm_flags |= VM_RESERVED;
 	vma->vm_ops = &exynos_mem_ops;

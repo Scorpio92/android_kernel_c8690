@@ -140,7 +140,6 @@ static struct syscore_ops timer_syscore_ops = {
 
 static int __init timer_init_syscore_ops(void)
 {
-
 	register_syscore_ops(&timer_syscore_ops);
 
 	return 0;

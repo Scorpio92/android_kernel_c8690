@@ -23,18 +23,7 @@
 #include <linux/init.h>
 #include <linux/nmi.h>
 #include <linux/dmi.h>
-#ifdef CONFIG_KERNEL_PANIC_DUMP  //ly 20120412
-#include <mach/panic-dump.h>
-#include <mach/regs-pmu.h>
-#include <asm/io.h>
-#endif 
-//#ifdef CONFIG_KERNEL_PANIC_DUMP 
 
-//panic log buffer
-//char PANIC_Base[0x8000];
-//char *PANIC_Current;
-
-//#endif
 #define PANIC_TIMER_STEP 100
 #define PANIC_BLINK_SPD 18
 
@@ -74,45 +63,26 @@ EXPORT_SYMBOL(panic_blink);
  *
  *	This function never returns.
  */
- #ifdef CONFIG_KERNEL_PANIC_DUMP  //ly 20120412
-// extern char * gp_log_buf ;
-//extern void arm_machine_panic_reset_prepare();
-//bool step1=0, step2=0,step3=0,step4=0, step5=0;
-#endif
 NORET_TYPE void panic(const char * fmt, ...)
 {
 	static char buf[1024];
 	va_list args;
 	long i, i_next = 0;
 	int state = 0;
-#ifdef CONFIG_KERNEL_PANIC_DUMP  //ly 20120412
-	printk("***********enter  Panic*********\n");
 
-	//#ifdef CONFIG_KERNEL_PANIC_DUMP 
-	//panic_info_dump_to_mem();
-	//#endif
-	//while(1)	{;}
-
-	panic_dump_info_set();
-	//step1=1;
-	//for ( i=0;i<50;i++)
-	//		printk("***********after dump set *********\n");
-	//arm_machine_panic_reset_prepare();
 	/*
 	 * It's possible to come here directly from a panic-assertion and
 	 * not have preempt disabled. Some functions called from here want
 	 * preempt to be disabled. No point enabling it later though...
 	 */
-#endif
 	preempt_disable();
+
 	console_verbose();
 	bust_spinlocks(1);
-
 	va_start(args, fmt);
 	vsnprintf(buf, sizeof(buf), fmt, args);
 	va_end(args);
 	printk(KERN_EMERG "Kernel panic - not syncing: %s\n",buf);
-
 #ifdef CONFIG_DEBUG_BUGVERBOSE
 	dump_stack();
 #endif
@@ -140,40 +110,7 @@ NORET_TYPE void panic(const char * fmt, ...)
 	if (!panic_blink)
 		panic_blink = no_blink;
 
-#ifdef CONFIG_KERNEL_PANIC_DUMP  //ly 20120412
-	//printk("***********enter Panic222: 0x%x*********\n",(*(int *)phys_to_virt(PANIC_INFO_DUMP_ADD)));
-	//if (panic_timeout > 0) {
-		/*
-		 * Delay timeout seconds before rebooting the machine.
-		 * We can't use the "normal" timers since we just panicked.
-		 */
-	//	 for ( i=0;i<100;i++)
-			printk(KERN_EMERG "Rebooting in 0 seconds..");
-		
-#if 0
-		for (i = 0; i < panic_timeout * 1000; i += PANIC_TIMER_STEP) {
-			touch_nmi_watchdog();
-			if (i >= i_next) {
-				i += panic_blink(state ^= 1);
-				i_next = i + 3600 / PANIC_BLINK_SPD;
-			}
-			mdelay(PANIC_TIMER_STEP);
-		}
-		/*
-		 * This will not be a clean reboot, with everything
-		 * shutting down.  But if there is a chance of
-		 * rebooting the system it will be rebooted.
-		 */
-#endif
-	#if 0
-		arm_machine_panic_reset_prepare();
-	__raw_writel(0x1, S5P_SWRESET);
-	#else
-		emergency_restart();
-	#endif
-
-#else
-		if (panic_timeout > 0) {
+	if (panic_timeout > 0) {
 		/*
 		 * Delay timeout seconds before rebooting the machine.
 		 * We can't use the "normal" timers since we just panicked.
@@ -195,8 +132,6 @@ NORET_TYPE void panic(const char * fmt, ...)
 		 */
 		emergency_restart();
 	}
-#endif
-	
 #ifdef __sparc__
 	{
 		extern int stop_a_enabled;
