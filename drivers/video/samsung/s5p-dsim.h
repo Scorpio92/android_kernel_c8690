@@ -40,7 +40,7 @@ struct mipi_lcd_driver {
 	s32	(*probe)(struct device *dev);
 	s32	(*remove)(struct device *dev);
 	void	(*shutdown)(struct device *dev);
-	s32	(*suspend)(struct device *dev, pm_message_t mesg);
+	s32	(*suspend)(void);
 	s32	(*resume)(struct device *dev);
 
 	bool	(*partial_mode_status)(struct device *dev);
@@ -49,15 +49,6 @@ struct mipi_lcd_driver {
 	void	(*display_off)(struct device *dev);
 	int	(*is_panel_on)(void);
 };
-
-struct dsim_ops {
-	u8	(*cmd_write)(void *ptr, u32 data0, u32 data1, u32 data2);
-	int	(*cmd_read)(void *ptr, u8 addr, u16 count, u8 *buf);
-	int	(*cmd_dcs_read)(void *ptr, u8 addr, u16 count, u8 *buf);
-	void	(*suspend)(void);
-	void	(*resume)(void);
-};
-
 
 int s5p_dsim_register_lcd_driver(struct mipi_lcd_driver *lcd_drv);
 
