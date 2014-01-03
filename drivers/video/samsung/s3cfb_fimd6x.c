@@ -357,7 +357,7 @@ int s3cfb_set_lcd_size(struct s3cfb_global *ctrl)
 	u32 cfg = 0;
 
 #ifdef CONFIG_FB_S5P_WA101S
-	cfg |= S3C_VIDTCON2_HOZVAL(ctrl->lcd->width - 1 + 6);
+	cfg |= S3C_VIDTCON2_HOZVAL(ctrl->lcd->width - 1);
 #else
 	cfg |= S3C_VIDTCON2_HOZVAL(ctrl->lcd->width - 1);
 #endif
