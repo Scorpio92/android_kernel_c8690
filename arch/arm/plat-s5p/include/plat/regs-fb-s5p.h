@@ -120,6 +120,9 @@
 #define S3C_WPALCON_H		(0x019C)	/* Window Palette control */
 #define S3C_WPALCON_L		(0x01A0)	/* Window Palette control */
 
+#define S3C_I80IFCONA0		(0x01B0)	/* I80 Interface control 0 for Main LDI */
+#define S3C_TRIGCON		(0x01A4)	/* I80 / RGB Trigger Control Regiter	*/
+
 #define S3C_VIDW0ALPHA0		(0x0200)	/* Window 0 alpha value 0 */
 #define S3C_VIDW0ALPHA1		(0x0204)	/* Window 0 alpha value 1 */
 #define S3C_VIDW1ALPHA0		(0x0208)	/* Window 1 alpha value 0 */
