@@ -828,6 +828,83 @@ static int s3cfb_remove(struct platform_device *pdev)
 	return 0;
 }
 
+void s3cfb_lcd0_power_domain_start(void)
+{
+	int timeout;
+	writel(S5P_INT_LOCAL_PWR_EN, S5P_PMU_LCD0_CONF);
+
+	/* Wait max 1ms */
+	timeout = 1000;
+	while ((readl(S5P_PMU_LCD0_CONF + 0x4) & S5P_INT_LOCAL_PWR_EN)\
+		!= S5P_INT_LOCAL_PWR_EN) {
+		if (timeout == 0) {
+			printk(KERN_ERR "Power domain lcd0 enable failed.\n");
+			break;
+		}
+		timeout--;
+		udelay(1);
+	}
+
+	if (timeout == 0) {
+		timeout = 1000;
+		writel(0x1, S5P_PMU_LCD0_CONF + 0x8);
+		writel(S5P_INT_LOCAL_PWR_EN, S5P_PMU_LCD0_CONF);
+		while ((readl(S5P_PMU_LCD0_CONF + 0x4) & S5P_INT_LOCAL_PWR_EN)\
+			!= S5P_INT_LOCAL_PWR_EN) {
+
+			if (timeout == 0) {
+				printk(KERN_ERR "Power domain lcd0 enable failed 2nd.\n");
+				break;
+			}
+
+			timeout--;
+			udelay(1);
+		}
+		writel(0x2, S5P_PMU_LCD0_CONF + 0x8);
+	}
+}
+
+void s3cfb_lcd0_power_domain_stop(void)
+{
+	int timeout;
+
+	writel(0, S5P_PMU_LCD0_CONF);
+
+	/* Wait max 1ms */
+	timeout = 1000;
+	while (readl(S5P_PMU_LCD0_CONF + 0x4) & S5P_INT_LOCAL_PWR_EN) {
+		if (timeout == 0) {
+			printk(KERN_ERR "Power domain lcd0 disable failed.\n");
+			break;
+		}
+		timeout--;
+		udelay(1);
+	}
+
+	if (timeout == 0) {
+		timeout = 1000;
+		writel(0x1, S5P_PMU_LCD0_CONF + 0x8);
+		writel(0, S5P_PMU_LCD0_CONF);
+		while (readl(S5P_PMU_LCD0_CONF + 0x4) & S5P_INT_LOCAL_PWR_EN) {
+			if (timeout == 0) {
+				printk(KERN_ERR "Power domain lcd0 disable failed 2nd.\n");
+				break;
+			}
+			timeout--;
+			udelay(1);
+		}
+		writel(0x2, S5P_PMU_LCD0_CONF + 0x8);
+	}
+}
+
+void s3cfb_lcd0_pmu_off(void)
+{
+	s3cfb_lcd0_power_domain_stop();
+	usleep_range(5000, 5000);
+	s3cfb_lcd0_power_domain_start();
+	printk(KERN_WARNING "lcd0 pmu re_start!!!\n");
+}
+
 #ifdef CONFIG_PM
 #ifdef CONFIG_HAS_EARLYSUSPEND
 void (*lcd_early_suspend)(void);
@@ -838,11 +915,9 @@ void s3cfb_early_suspend(struct early_suspend *h)
 	struct s3c_platform_fb *pdata = to_fb_plat(info->dev);
 	struct platform_device *pdev = to_platform_device(info->dev);
 	struct s3cfb_global *fbdev[2];
-	int i;
+	int i, ret;
 
-	printk("s3cfb_early_suspend is called\n");
-
-	//info->system_state = POWER_OFF;
+	printk(KERN_INFO "+%s\n", __func__);
 
 	for (i = 0; i < FIMD_MAX; i++) {
 		fbdev[i] = fbfimd->fbdev[i];
@@ -850,12 +925,37 @@ void s3cfb_early_suspend(struct early_suspend *h)
 		if (pdata->backlight_off)
 			pdata->backlight_off(pdev);
 
+		if (pdata->lcd_off)
+			pdata->lcd_off(pdev);
+
+		/* Disable Vsync */
+		s3cfb_set_global_interrupt(fbdev[i], 0);
+		s3cfb_set_vsync_interrupt(fbdev[i], 0);
+
 #ifdef CONFIG_FB_S5P_AMS369FG06
 		ams369fg06_ldi_disable();
 #elif defined(CONFIG_FB_S5P_LMS501KF03)
 		lms501kf03_ldi_disable();
 #endif
-		s3cfb_display_off(fbdev[i]);
+		ret = s3cfb_display_off(fbdev[i]);
+
+#ifdef CONFIG_FB_S5P_MDNIE
+		ret += s3c_mdnie_display_off();
+#endif
+
+		if (ret > 0)
+			s3cfb_lcd0_pmu_off();
+
+		info->system_state = POWER_OFF;
+
+/*вызывает зависон при перезагрузке
+		if (fbdev[i]->regs) {
+			fbdev[i]->regs_org = fbdev[i]->regs;
+			spin_lock(&fbdev[i]->slock);
+			fbdev[i]->regs = 0;
+			spin_unlock(&fbdev[i]->slock);
+		}
+*/
 		if (pdata->clk_off)
 			pdata->clk_off(pdev, &fbdev[i]->clock);
 	}
@@ -868,7 +968,7 @@ void s3cfb_early_suspend(struct early_suspend *h)
 	/* disabled for showing logo in bootloader 				 */
 	exynos_pd_disable(&exynos4_device_pd[PD_LCD0].dev);
 #endif
-	info->system_state = POWER_OFF;
+
 #ifndef CONFIG_TC4_EVT
 	if( IS_ERR_OR_NULL(lcd_regulator) )
 	{
@@ -881,10 +981,19 @@ void s3cfb_early_suspend(struct early_suspend *h)
 		return;
 	}
 	regulator_force_disable(lcd_regulator); 	//yulu
-//	regulator_force_disable(lcd_regulator_ldo13); 	//jacob
 	regulator_disable(lcd_regulator_ldo13); 	//jacob
 
 #endif
+
+#ifdef CONFIG_FB_S5P_SYSMMU
+	if (fbdev[0]->sysmmu.enabled == true) {
+		fbdev[0]->sysmmu.enabled = false;
+		fbdev[0]->sysmmu.pgd = 0;
+		s5p_sysmmu_disable(fbdev[0]->dev);
+	}
+#endif
+
+	printk(KERN_INFO "-%s\n", __func__);
 
 	return ;
 }

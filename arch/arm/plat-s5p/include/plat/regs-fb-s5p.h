@@ -406,4 +406,10 @@
 /* WxKEYCON1 (1~4) */
 #define S3C_KEYCON1_COLVAL(x)			(((x) & 0xffffff) << 0)
 
+/* DUALRGB */
+#define S3C_DUALRGB_BYPASS_SINGLE	(0 << 0)
+#define S3C_DUALRGB_BYPASS_DUAL	(1 << 0)
+#define S3C_DUALRGB_MIE_DUAL		(2 << 0)
+#define S3C_DUALRGB_MDNIE		(3 << 0)
+
 #endif /* __ASM_PLAT_REGS_FB_S5P_H */
