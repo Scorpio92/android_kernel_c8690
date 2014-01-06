@@ -667,9 +667,11 @@ end:
 	return handle;
 }
 
-struct ion_handle *ion_import_uva(struct ion_client *client, unsigned long uva)
+struct ion_handle *ion_import_uva(struct ion_client *client, unsigned long uva,
+								off_t *offset)
 {
 	struct vm_area_struct *vma;
+	struct ion_handle *handle;
 
 	vma = find_vma(current->mm, uva);
 	if (!vma) {
@@ -688,7 +690,28 @@ struct ion_handle *ion_import_uva(struct ion_client *client, unsigned long uva)
 		return ERR_PTR(-ENXIO);
 	}
 
-	return ion_import(client, vma->vm_file->private_data);
+	handle = ion_import(client, vma->vm_file->private_data);
+	if (IS_ERR(handle))
+		return handle;
+
+	if (offset) {
+		ion_phys_addr_t phys;
+
+		*offset = vma->vm_pgoff << PAGE_SHIFT;
+
+		if (is_linear_pfn_mapping(vma)) {
+			/* if vma is VM_PFN_AT_MMAPed, vma->vm_pgoff indicates
+			 * mapped physical address */
+			size_t len;
+			if (ion_phys(client, handle, &phys, &len))
+				return ERR_PTR(-EINVAL);
+
+			*offset -= phys;
+		}
+		*offset += uva - vma->vm_start;
+	}
+
+	return handle;
 }
 
 static int ion_debug_client_show(struct seq_file *s, void *unused)
@@ -1011,8 +1034,8 @@ static int ion_share_mmap(struct file *file, struct vm_area_struct *vma)
 		return -EINVAL;
 	}
 
-	if ((size > buffer->size) || (size + (vma->vm_pgoff << PAGE_SHIFT) >
-				     buffer->size)) {
+	if (((vma->vm_pgoff << PAGE_SHIFT) >= buffer->size) ||
+		(size > (buffer->size - (vma->vm_pgoff << PAGE_SHIFT)))) {
 		pr_err("%s: trying to map larger area than handle has available"
 		       "\n", __func__);
 		ret = -EINVAL;

@@ -37,16 +37,6 @@ source "drivers/media/video/samsung/fimg2d3x/Kconfig"
 source "drivers/media/video/samsung/fimg2d4x/Kconfig"
 source "drivers/media/video/samsung/fimg2d_android/Kconfig"
 
-if  TC4_GB	
-	source "drivers/media/video/samsung/ump_gb/Kconfig"
-	source "drivers/media/video/samsung/mali_gb/Kconfig"
-endif
-
-if TC4_ICS
-	source "drivers/media/video/samsung/ump_ics/Kconfig"
-	source "drivers/media/video/samsung/mali_ics/Kconfig"
-endif
-
 
 if CPU_EXYNOS4212 || CPU_EXYNOS5250
 	source "drivers/media/video/samsung/jpeg/Kconfig"
