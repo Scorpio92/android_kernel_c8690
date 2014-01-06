@@ -105,6 +105,16 @@ config FB_S5P_MIPI_DSIM
 
 choice
 depends on FB_S5P
+prompt "Select RGB Order"
+default FB_BGRA_ORDER
+config FB_BGRA_ORDER
+	bool "BGRA8888"
+	help
+	  This enables use BGRA order.
+endchoice
+
+choice
+depends on FB_S5P
 prompt "Select LCD Type"
 default FB_S5P_AMS369FG06
 config FB_S5P_LTE480WV
