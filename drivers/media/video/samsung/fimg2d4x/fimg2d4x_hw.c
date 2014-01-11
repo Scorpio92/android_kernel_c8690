@@ -345,7 +345,7 @@ void fimg2d4x_enable_dithering(struct fimg2d_control *info)
 	wr(cfg, FIMG2D_BITBLT_COMMAND_REG);
 }
 
-#define MAX_PRECISION 16
+#define MAX_PRECISION		16
 #define DEFAULT_SCALE_RATIO	0x10000
 
 /**
@@ -540,11 +540,13 @@ void fimg2d4x_set_rotation(struct fimg2d_control *info, enum rotation rot)
 void fimg2d4x_set_fgcolor(struct fimg2d_control *info, unsigned long fg)
 {
 	wr(fg, FIMG2D_FG_COLOR_REG);
+		wr(fg, FIMG2D_FG_COLOR_REG);
 }
 
 void fimg2d4x_set_bgcolor(struct fimg2d_control *info, unsigned long bg)
 {
 	wr(bg, FIMG2D_BG_COLOR_REG);
+		wr(bg, FIMG2D_BG_COLOR_REG);
 }
 
 void fimg2d4x_enable_alpha(struct fimg2d_control *info, unsigned char g_alpha)

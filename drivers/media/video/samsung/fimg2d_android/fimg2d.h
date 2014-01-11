@@ -1,4 +1,4 @@
-/* drivers/media/video/samsung/fimg2d3x/fimg2d_3x.h
+/* drivers/media/video/samsung/fimg2d_android/fimg2d_3x.h
  *
  * Copyright  2010 Samsung Electronics Co, Ltd. All Rights Reserved.
  *		      http://www.samsungsemi.com/
@@ -297,7 +297,6 @@ struct g2d_global {
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	struct early_suspend	early_suspend;
 #endif	
-	int                     irq_handled;
 };
 
 
@@ -359,6 +358,7 @@ u32  g2d_set_clip_win(struct g2d_global *g2d_dev, g2d_clip * rect);
 u32  g2d_set_rotation(struct g2d_global *g2d_dev, g2d_flag * flag);
 u32  g2d_set_color_key(struct g2d_global *g2d_dev, g2d_flag * flag);
 u32  g2d_set_alpha(struct g2d_global *g2d_dev, g2d_flag * flag);
+u32 g2d_set_scale(struct g2d_global *g2d_dev, g2d_rect * src_rect, g2d_rect * dst_rect, g2d_flag * flag);
 void g2d_set_bitblt_cmd(struct g2d_global *g2d_dev, g2d_rect * src_rect, g2d_rect * dst_rect, g2d_clip * clip, u32 blt_cmd);
 void g2d_reset(struct g2d_global *g2d_dev);
 void g2d_disable_int(struct g2d_global *g2d_dev);
@@ -377,10 +377,8 @@ u32 g2d_check_pagetable(void * vaddr, unsigned int size, unsigned long pgd);
 void g2d_pagetable_clean(const void *start_addr, unsigned long size, unsigned long pgd);
 int g2d_check_need_dst_cache_clean(g2d_params * params);
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
 void g2d_early_suspend(struct early_suspend *h);
 void g2d_late_resume(struct early_suspend *h);
-#endif
 
 /* fimg2d_core */
 int g2d_clk_enable(struct g2d_global *g2d_dev);

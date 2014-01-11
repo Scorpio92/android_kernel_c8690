@@ -27,17 +27,20 @@
 #include <linux/videodev2.h>
 #include <media/v4l2-subdev.h>
 #include <linux/videodev2.h>
-#include <linux/videodev2_exynos_camera.h>
+#include <linux/videodev2_samsung.h>
 #include <linux/gpio.h>
 #include <linux/gpio_event.h>
 #include <plat/gpio-cfg.h>
-#include <plat/cpu.h>
 
 #include "fimc-is-core.h"
 #include "fimc-is-regs.h"
 #include "fimc-is-cmd.h"
 #include "fimc-is-param.h"
 #include "fimc-is-err.h"
+
+#include <linux/syscalls.h>
+#include <linux/uaccess.h>
+#include <linux/file.h>
 
 static const struct sensor_param init_val_sensor_preview_still = {
 	.frame_rate = {
@@ -92,6 +95,8 @@ static const struct isp_param init_val_isp_preview_still = {
 		.scene = 0,
 		.sleep = 0,
 		.face = 0,
+		.touch = 0,
+		.response = 0,
 		.touch_x = 0, .touch_y = 0,
 		.manual_af_setting = 0,
 		.err = ISP_AF_ERROR_NO,
@@ -239,10 +244,10 @@ static const struct fd_param init_val_fd_preview_still = {
 		.max_number = 5,
 		.roll_angle = FD_CONFIG_ROLL_ANGLE_FULL,
 		.yaw_angle = FD_CONFIG_YAW_ANGLE_45_90,
-		.smile_mode = FD_CONFIG_SMILE_MODE_DISABLE,
-		.blink_mode = FD_CONFIG_BLINK_MODE_DISABLE,
+		.smile_mode = FD_CONFIG_SMILE_MODE_ENABLE,
+		.blink_mode = FD_CONFIG_BLINK_MODE_ENABLE,
 		.eye_detect = FD_CONFIG_EYES_DETECT_ENABLE,
-		.mouth_detect = FD_CONFIG_MOUTH_DETECT_DISABLE,
+		.mouth_detect = FD_CONFIG_MOUTH_DETECT_ENABLE,
 		.orientation = FD_CONFIG_ORIENTATION_DISABLE,
 		.orientation_value = 0,
 		.err = ERROR_FD_NO,
@@ -302,6 +307,8 @@ static const struct isp_param init_val_isp_capture = {
 		.scene = 0,
 		.sleep = 0,
 		.face = 0,
+		.touch = 0,
+		.response = 0,
 		.touch_x = 0, .touch_y = 0,
 		.manual_af_setting = 0,
 		.err = ISP_AF_ERROR_NO,
@@ -503,6 +510,8 @@ static const struct isp_param init_val_isp_preview_video = {
 		.scene = 0,
 		.sleep = 0,
 		.face = 0,
+		.touch = 0,
+		.response = 0,
 		.touch_x = 0, .touch_y = 0,
 		.manual_af_setting = 0,
 		.err = ISP_AF_ERROR_NO,
@@ -714,6 +723,8 @@ static const struct isp_param init_val_isp_camcording = {
 		.scene = 0,
 		.sleep = 0,
 		.face = 0,
+		.touch = 0,
+		.response = 0,
 		.touch_x = 0, .touch_y = 0,
 		.manual_af_setting = 0,
 		.err = ISP_AF_ERROR_NO,
@@ -883,21 +894,50 @@ int fimc_is_hw_wait_intsr0_intsd0(struct fimc_is_dev *dev)
 	u32 timeout;
 	u32 cfg = readl(dev->regs + INTSR0);
 	u32 status = INTSR0_GET_INTSD0(cfg);
-	timeout = 50000;
 
+	timeout = 1000;
 	while (status) {
-
-		printk(KERN_INFO "%s check status \n", __func__);
 		cfg = readl(dev->regs + INTSR0);
 		status = INTSR0_GET_INTSD0(cfg);
 		if (timeout == 0) {
-			printk(KERN_INFO "%s check status failed..\n", __func__);
-			return -1;
+			err("Check status failed..\n");
+			return -EINVAL;
 		}
 		timeout--;
 		udelay(1);
 	}
 	return 0;
+}
+
+ bool dump_flag = true;
+ void dump_region(struct fimc_is_dev *dev)
+{
+	int i, j;
+	struct file *file;
+	loff_t pos = 0;
+	int fd;
+	mm_segment_t old_fs;
+	char filename[] = "/data/fimcis/fimc_is.raw";
+
+	printk(KERN_INFO "---- start FW dump ----\n");
+
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	fd = sys_open(filename, O_WRONLY|O_CREAT, 0644);
+	if (fd >= 0) {
+		sys_write(fd, (u8 *)phys_to_virt(dev->mem.base), 10*1024*1024);
+		file = fget(fd);
+		if (file) {
+			vfs_write(file, (u8 *)phys_to_virt(dev->mem.base), 10*1024*1024, &pos);
+			fput(file);
+		}
+		sys_close(fd);
+	} 
+	else
+		printk(KERN_ERR "Dump FW error !! \n");
+
+	set_fs(old_fs);
 }
 
 int fimc_is_hw_wait_intmsr0_intmsd0(struct fimc_is_dev *dev)
@@ -907,15 +947,16 @@ int fimc_is_hw_wait_intmsr0_intmsd0(struct fimc_is_dev *dev)
 	u32 status = INTMSR0_GET_INTMSD0(cfg);
 
 	timeout = 50000;
-
 	while (status) {
-		printk(KERN_INFO "%s check status \n", __func__);
-
 		cfg = readl(dev->regs + INTMSR0);
 		status = INTMSR0_GET_INTMSD0(cfg);
 		if (timeout == 0) {
-			printk(KERN_INFO "%s check status failed..\n", __func__);
-			return -1;
+			err("Check status failed..\n");
+			if (dump_flag == true) {
+				dump_region(dev);
+				dump_flag = false;
+			}
+			return -EINVAL;
 		}
 		timeout--;
 		udelay(1);
@@ -1031,7 +1072,7 @@ int fimc_is_hw_get_sensor_max_framerate(struct fimc_is_dev *dev)
 	}
 	return max_framerate;
 }
-
+#define CONFIG_MACH_STUTTGART 1
 void fimc_is_hw_open_sensor(struct fimc_is_dev *dev, u32 id, u32 sensor_index)
 {
 	struct sensor_open_extended *sensor_ext = NULL;
@@ -1039,47 +1080,53 @@ void fimc_is_hw_open_sensor(struct fimc_is_dev *dev, u32 id, u32 sensor_index)
 	writel(HIC_OPEN_SENSOR, dev->regs + ISSR0);
 	writel(id, dev->regs + ISSR1);
 	switch (sensor_index) {
-	case SENSOR_S5K3H2_CSI_A:
+/*
+	For lenovo, flash function added.
+	open sensor ext parameter changed. Jiangshanbin 2012/05/16
+*/
+#if CONFIG_MACH_STUTTGART
+	case SENSOR_S5K3H7_CSI_A:
+		printk("--- %s CONFIG_MACH_STUTTGART case SENSOR_S5K3H7_CSI_A",__FUNCTION__);
 		sensor_ext = (struct sensor_open_extended *)
 						&dev->is_p_region->shared;
-		sensor_ext->actuator_type = 1;
+		 sensor_ext->actuator_con.product_name = ACTUATOR_NAME_DWXXXX;;
+	      sensor_ext->actuator_con.peri_type = SE_I2C;    
+	      sensor_ext->actuator_con.peri_setting.i2c.channel = SENSOR_CONTROL_I2C0;
+
+	      sensor_ext->flash_con.product_name = FLADRV_NAME_KTD267;
+			  sensor_ext->flash_con.peri_type = SE_GPIO;
+	      sensor_ext->flash_con.peri_setting.gpio.first_gpio_port_no= 8;
+	      sensor_ext->flash_con.peri_setting.gpio.second_gpio_port_no=9;   
+
+		  sensor_ext->from_con.product_name = FROMDRV_NAME_NOTHING;
+
 		sensor_ext->mclk = 0;
 		sensor_ext->mipi_lane_num = 0;
 		sensor_ext->mipi_speed = 0;
 		sensor_ext->fast_open_sensor = 0;
 		sensor_ext->self_calibration_mode = 0;
-		if (samsung_rev() >= EXYNOS4412_REV_2_0)
-			sensor_ext->i2c_sclk = 88000000;
-		else
-			sensor_ext->i2c_sclk = 80000000;
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		dev->af.use_af = 1;
+		dev->sensor.sensor_type = SENSOR_S5K3H7_CSI_A;
+		writel(SENSOR_NAME_S5K3H7, dev->regs + ISSR2);
+		writel(SENSOR_CONTROL_I2C0, dev->regs + ISSR3);
+		writel(virt_to_phys(sensor_ext), dev->regs + ISSR4);
+		break;
+#else	
+	case SENSOR_S5K3H2_CSI_A:
 		dev->af.use_af = 1;
 		dev->sensor.sensor_type = SENSOR_S5K3H2_CSI_A;
 		writel(SENSOR_NAME_S5K3H2, dev->regs + ISSR2);
 		writel(SENSOR_CONTROL_I2C0, dev->regs + ISSR3);
-		writel(virt_to_phys(sensor_ext), dev->regs + ISSR4);
+		writel(0x0, dev->regs + ISSR4);
 		break;
 	case SENSOR_S5K3H2_CSI_B:
-		sensor_ext = (struct sensor_open_extended *)
-						&dev->is_p_region->shared;
-		sensor_ext->actuator_type = 1;
-		sensor_ext->mclk = 0;
-		sensor_ext->mipi_lane_num = 0;
-		sensor_ext->mipi_speed = 0;
-		sensor_ext->fast_open_sensor = 0;
-		sensor_ext->self_calibration_mode = 0;
-		if (samsung_rev() >= EXYNOS4412_REV_2_0)
-			sensor_ext->i2c_sclk = 88000000;
-		else
-			sensor_ext->i2c_sclk = 80000000;
-		fimc_is_mem_cache_clean((void *)dev->is_p_region,
-							IS_PARAM_SIZE);
 		dev->af.use_af = 1;
 		dev->sensor.sensor_type = SENSOR_S5K3H2_CSI_B;
 		writel(SENSOR_NAME_S5K3H2, dev->regs + ISSR2);
 		writel(SENSOR_CONTROL_I2C1, dev->regs + ISSR3);
-		writel(virt_to_phys(sensor_ext), dev->regs + ISSR4);
+		writel(0x0, dev->regs + ISSR4);
 		break;
 	case SENSOR_S5K6A3_CSI_A:
 		sensor_ext = (struct sensor_open_extended *)
@@ -1090,10 +1137,6 @@ void fimc_is_hw_open_sensor(struct fimc_is_dev *dev, u32 id, u32 sensor_index)
 		sensor_ext->mipi_speed = 0;
 		sensor_ext->fast_open_sensor = 0;
 		sensor_ext->self_calibration_mode = 1;
-		if (samsung_rev() >= EXYNOS4412_REV_2_0)
-			sensor_ext->i2c_sclk = 88000000;
-		else
-			sensor_ext->i2c_sclk = 80000000;
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
 		dev->af.use_af = 0;
@@ -1111,10 +1154,6 @@ void fimc_is_hw_open_sensor(struct fimc_is_dev *dev, u32 id, u32 sensor_index)
 		sensor_ext->mipi_speed = 0;
 		sensor_ext->fast_open_sensor = 0;
 		sensor_ext->self_calibration_mode = 1;
-		if (samsung_rev() >= EXYNOS4412_REV_2_0)
-			sensor_ext->i2c_sclk = 88000000;
-		else
-			sensor_ext->i2c_sclk = 80000000;
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
 		dev->af.use_af = 0;
@@ -1124,6 +1163,7 @@ void fimc_is_hw_open_sensor(struct fimc_is_dev *dev, u32 id, u32 sensor_index)
 		writel(virt_to_phys(sensor_ext), dev->regs + ISSR4);
 		break;
 	case SENSOR_S5K3H7_CSI_A:
+		printk("--- %s case SENSOR_S5K3H7_CSI_A",__FUNCTION__);
 		sensor_ext = (struct sensor_open_extended *)
 						&dev->is_p_region->shared;
 		sensor_ext->actuator_type = 3;
@@ -1132,10 +1172,6 @@ void fimc_is_hw_open_sensor(struct fimc_is_dev *dev, u32 id, u32 sensor_index)
 		sensor_ext->mipi_speed = 0;
 		sensor_ext->fast_open_sensor = 0;
 		sensor_ext->self_calibration_mode = 0;
-		if (samsung_rev() >= EXYNOS4412_REV_2_0)
-			sensor_ext->i2c_sclk = 88000000;
-		else
-			sensor_ext->i2c_sclk = 80000000;
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
 		dev->af.use_af = 1;
@@ -1153,10 +1189,6 @@ void fimc_is_hw_open_sensor(struct fimc_is_dev *dev, u32 id, u32 sensor_index)
 		sensor_ext->mipi_speed = 0;
 		sensor_ext->fast_open_sensor = 0;
 		sensor_ext->self_calibration_mode = 0;
-		if (samsung_rev() >= EXYNOS4412_REV_2_0)
-			sensor_ext->i2c_sclk = 88000000;
-		else
-			sensor_ext->i2c_sclk = 80000000;
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
 		dev->af.use_af = 1;
@@ -1166,46 +1198,18 @@ void fimc_is_hw_open_sensor(struct fimc_is_dev *dev, u32 id, u32 sensor_index)
 		writel(virt_to_phys(sensor_ext), dev->regs + ISSR4);
 		break;
 	case SENSOR_S5K4E5_CSI_A:
-		sensor_ext = (struct sensor_open_extended *)
-						&dev->is_p_region->shared;
-		sensor_ext->actuator_type = 1;
-		sensor_ext->mclk = 0;
-		sensor_ext->mipi_lane_num = 0;
-		sensor_ext->mipi_speed = 0;
-		sensor_ext->fast_open_sensor = 0;
-		sensor_ext->self_calibration_mode = 0;
-		if (samsung_rev() >= EXYNOS4412_REV_2_0)
-			sensor_ext->i2c_sclk = 88000000;
-		else
-			sensor_ext->i2c_sclk = 80000000;
-		fimc_is_mem_cache_clean((void *)dev->is_p_region,
-							IS_PARAM_SIZE);
 		dev->af.use_af = 1;
 		dev->sensor.sensor_type = SENSOR_S5K4E5_CSI_A;
 		writel(SENSOR_NAME_S5K4E5, dev->regs + ISSR2);
 		writel(SENSOR_CONTROL_I2C0, dev->regs + ISSR3);
-		writel(virt_to_phys(sensor_ext), dev->regs + ISSR4);
+		writel(0x0, dev->regs + ISSR4);
 		break;
 	case SENSOR_S5K4E5_CSI_B:
-		sensor_ext = (struct sensor_open_extended *)
-						&dev->is_p_region->shared;
-		sensor_ext->actuator_type = 1;
-		sensor_ext->mclk = 0;
-		sensor_ext->mipi_lane_num = 0;
-		sensor_ext->mipi_speed = 0;
-		sensor_ext->fast_open_sensor = 0;
-		sensor_ext->self_calibration_mode = 0;
-		if (samsung_rev() >= EXYNOS4412_REV_2_0)
-			sensor_ext->i2c_sclk = 88000000;
-		else
-			sensor_ext->i2c_sclk = 80000000;
-		fimc_is_mem_cache_clean((void *)dev->is_p_region,
-							IS_PARAM_SIZE);
 		dev->af.use_af = 1;
 		dev->sensor.sensor_type = SENSOR_S5K4E5_CSI_B;
 		writel(SENSOR_NAME_S5K4E5, dev->regs + ISSR2);
 		writel(SENSOR_CONTROL_I2C1, dev->regs + ISSR3);
-		writel(virt_to_phys(sensor_ext), dev->regs + ISSR4);
+		writel(0x0, dev->regs + ISSR4);
 		break;
 	case SENSOR_S5K6A3_CSI_B_CUSTOM:
 		sensor_ext = (struct sensor_open_extended *)
@@ -1216,10 +1220,6 @@ void fimc_is_hw_open_sensor(struct fimc_is_dev *dev, u32 id, u32 sensor_index)
 		sensor_ext->mipi_speed = 0;
 		sensor_ext->fast_open_sensor = 6;
 		sensor_ext->self_calibration_mode = 1;
-		if (samsung_rev() >= EXYNOS4412_REV_2_0)
-			sensor_ext->i2c_sclk = 88000000;
-		else
-			sensor_ext->i2c_sclk = 80000000;
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
 		dev->af.use_af = 0;
@@ -1228,6 +1228,7 @@ void fimc_is_hw_open_sensor(struct fimc_is_dev *dev, u32 id, u32 sensor_index)
 		writel(SENSOR_CONTROL_I2C1, dev->regs + ISSR3);
 		writel(virt_to_phys(sensor_ext), dev->regs + ISSR4);
 		break;
+#endif
 	}
 	fimc_is_hw_set_intgr0_gd0(dev);
 }
@@ -1305,11 +1306,9 @@ void fimc_is_hw_a5_power(struct fimc_is_dev *dev, int on)
 {
 	u32 cfg;
 	u32 timeout;
-	printk(KERN_INFO "%s++ %d \n", __func__, on);
 
 	if (on) {
 		/* watchdog disable */
-		printk(KERN_INFO "%s on 1. watchdog disable\n", __func__);
 		writel(0x0, dev->regs + WDT);
 		/* 1. A5 start address setting */
 #if defined(CONFIG_VIDEOBUF2_CMA_PHYS)
@@ -1317,43 +1316,34 @@ void fimc_is_hw_a5_power(struct fimc_is_dev *dev, int on)
 #elif defined(CONFIG_VIDEOBUF2_ION)
 		cfg = dev->mem.dvaddr;
 #endif
-		printk(KERN_INFO "%s on 2. access BBOAR\n", __func__);
 		writel(cfg, dev->regs + BBOAR);
 		/* 2. A5 power on*/
-		printk(KERN_INFO "%s on 3. access PMUREG_ISP_ARM_CONFIGURATION\n", __func__);
 		writel(0x1, PMUREG_ISP_ARM_CONFIGURATION);
 		/* 3. enable A5 */
-		printk(KERN_INFO "%s on 4. access PMUREG_ISP_ARM_OPTION\n", __func__);
 		writel(0x00018000, PMUREG_ISP_ARM_OPTION);
-		printk(KERN_INFO "%s on 5. complete\n", __func__);
 	} else {
 		/* 1. disable A5 */
-		printk(KERN_INFO "%s off 1. access PMUREG_ISP_ARM_OPTION\n", __func__);
 		if (dev->low_power_mode) {
 			/* Low power mode */
-			printk(KERN_INFO "%s off ?!?! Low power mode (Option 0)\n", __func__);
+			printk(KERN_INFO "Low power mode (Option 0)\n");
 			writel(0x0, PMUREG_ISP_ARM_OPTION);
 		} else {
 			writel(0x10000, PMUREG_ISP_ARM_OPTION);
 		}
 		/* 2. A5 power off*/
-		printk(KERN_INFO "%s off 2. access PMUREG_ISP_ARM_CONFIGURATION\n", __func__);
 		writel(0x0, PMUREG_ISP_ARM_CONFIGURATION);
 		/* 3. Check A5 power off status register */
-		printk(KERN_INFO "%s off 3. check A5 power off status\n", __func__);
 		timeout = 1000;
 		while (__raw_readl(PMUREG_ISP_ARM_STATUS) & 0x1) {
 			if (timeout == 0) {
-				printk(KERN_ERR "%s Low power off\n", __func__);
+				printk(KERN_ERR "Low power off\n");
 				fimc_is_hw_set_low_poweroff(dev, true);
 			}
-			printk(KERN_INFO "%s Wait A5 power off\n", __func__);
+			printk(KERN_INFO "Wait A5 power off\n");
 			timeout--;
 			udelay(1);
 		}
-		printk(KERN_INFO "%s off 4. complete\n", __func__);
 	}
-	printk(KERN_INFO "%s --\n", __func__);
 }
 
 void fimc_is_hw_set_sensor_num(struct fimc_is_dev *dev)
@@ -1380,7 +1370,9 @@ int fimc_is_hw_get_sensor_num(struct fimc_is_dev *dev)
 
 int fimc_is_hw_set_param(struct fimc_is_dev *dev)
 {
-	fimc_is_hw_wait_intmsr0_intmsd0(dev);
+	//If error , don't sent set_param cmd to A5. Jiangshanbin 2012/07/18
+	if(fimc_is_hw_wait_intmsr0_intmsd0(dev) < 0)
+		return;
 	writel(HIC_SET_PARAMETER, dev->regs + ISSR0);
 	writel(dev->sensor.id, dev->regs + ISSR1);
 
@@ -1470,8 +1462,10 @@ void fimc_is_hw_set_stream(struct fimc_is_dev *dev, int on)
 
 void fimc_is_hw_change_mode(struct fimc_is_dev *dev, int val)
 {
+       //#mmkim 0612 -- 4 .SetFile Index is 0 in STILL mode, 1 in VIDEO mode.
 	switch (val) {
 	case IS_MODE_PREVIEW_STILL:
+		//dev->setfile.sub_index =0;  
 		dev->scenario_id = ISS_PREVIEW_STILL;
 		fimc_is_hw_wait_intmsr0_intmsd0(dev);
 		writel(HIC_PREVIEW_STILL, dev->regs + ISSR0);
@@ -1480,6 +1474,7 @@ void fimc_is_hw_change_mode(struct fimc_is_dev *dev, int val)
 		fimc_is_hw_set_intgr0_gd0(dev);
 		break;
 	case IS_MODE_PREVIEW_VIDEO:
+		//dev->setfile.sub_index =1;
 		dev->scenario_id = ISS_PREVIEW_VIDEO;
 		fimc_is_hw_wait_intmsr0_intmsd0(dev);
 		writel(HIC_PREVIEW_VIDEO, dev->regs + ISSR0);
@@ -1488,6 +1483,7 @@ void fimc_is_hw_change_mode(struct fimc_is_dev *dev, int val)
 		fimc_is_hw_set_intgr0_gd0(dev);
 		break;
 	case IS_MODE_CAPTURE_STILL:
+		//dev->setfile.sub_index =0;
 		dev->scenario_id = ISS_CAPTURE_STILL;
 		fimc_is_hw_wait_intmsr0_intmsd0(dev);
 		writel(HIC_CAPTURE_STILL, dev->regs + ISSR0);
@@ -1496,6 +1492,7 @@ void fimc_is_hw_change_mode(struct fimc_is_dev *dev, int val)
 		fimc_is_hw_set_intgr0_gd0(dev);
 		break;
 	case IS_MODE_CAPTURE_VIDEO:
+		//dev->setfile.sub_index =1;
 		dev->scenario_id = ISS_CAPTURE_VIDEO;
 		fimc_is_hw_wait_intmsr0_intmsd0(dev);
 		writel(HIC_CAPTURE_VIDEO, dev->regs + ISSR0);

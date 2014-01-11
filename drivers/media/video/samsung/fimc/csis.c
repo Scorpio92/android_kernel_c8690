@@ -19,8 +19,6 @@
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
 #include <linux/videodev2.h>
-#include <linux/videodev2_exynos_media.h>
-#include <linux/videodev2_exynos_camera.h>
 
 #include <linux/io.h>
 #include <linux/memory.h>
@@ -33,8 +31,30 @@
 static s32 err_print_cnt;
 
 static struct s3c_csis_info *s3c_csis[S3C_CSIS_CH_NUM];
+
 static void s3c_csis_update_shadow(struct platform_device *pdev);
 static void s3c_csis_set_resol(struct platform_device *pdev, int width, int height);
+/***{
+ u32 cfg = 0;
+
+ cfg |= width << S3C_CSIS_RESOL_HOR_SHIFT;
+ cfg |= height << S3C_CSIS_RESOL_VER_SHIFT;
+
+ writel(cfg, s3c_csis[pdev->id]->regs + S3C_CSIS_RESOL);
+}
+
+
+/***
+static void s3c_csis_update_shadow(struct platform_device *pdev)
+{
+ u32 cfg;
+
+ cfg = readl(s3c_csis[pdev->id]->regs + S3C_CSIS_CONTROL);
+ cfg |= S3C_CSIS_CONTROL_UPDATE_SHADOW;
+ writel(cfg, s3c_csis[pdev->id]->regs + S3C_CSIS_CONTROL);
+}*/
+
+
 void s3c_csis_change_resolution(int csis_id, int width, int height)
 {
  struct platform_device *pdev = NULL;
@@ -52,6 +72,10 @@ void s3c_csis_change_resolution(int csis_id, int width, int height)
  return;
 }
 EXPORT_SYMBOL(s3c_csis_change_resolution);
+
+
+
+
 
 static int s3c_csis_set_info(struct platform_device *pdev)
 {
@@ -232,32 +256,16 @@ static void s3c_csis_set_hs_settle(struct platform_device *pdev, int settle)
 	writel(cfg, s3c_csis[pdev->id]->regs + S3C_CSIS_DPHYCTRL);
 }
 #endif
-
-int s3c_csis_get_pkt(int csis_id, void *pktdata)
-{
-	memcpy(pktdata, s3c_csis[csis_id]->bufs.pktdata, CSIS_PKTSIZE);
-	return 0;
-}
-
-void s3c_csis_enable_pktdata(int csis_id, bool enable)
-{
-	s3c_csis[csis_id]->pktdata_enable = enable;
-}
-
+///#ifdef CONFIG_VIDEO_S5K4ECGX
 int mipi_start = 0;//zxz 2012-3-21 temp for 5m sensor
 extern int mipid_start;
-
+///#endif
 void s3c_csis_start(int csis_id, int lanes, int settle, int align, int width, \
 				int height, int pixel_format)
 {
 	struct platform_device *pdev = NULL;
 	struct s3c_platform_csis *pdata = NULL;
-	int i;
-
-	printk(KERN_INFO "csis width = %d, height = %d\n", width, height);
-
-	memset(&s3c_csis[csis_id]->bufs, 0, sizeof(s3c_csis[csis_id]->bufs));
-
+	printk("\n =======CRYSTALcsis %s %d\n",__func__,__LINE__);
 	/* clock & power on */
 	pdev = to_platform_device(s3c_csis[csis_id]->dev);
 	pdata = to_csis_plat(&pdev->dev);
@@ -276,14 +284,15 @@ void s3c_csis_start(int csis_id, int lanes, int settle, int align, int width, \
 	s3c_csis_set_hs_settle(pdev, settle);	/* s5k6aa */
 	s3c_csis_set_data_align(pdev, align);
 	s3c_csis_set_wclk(pdev, 1);
-	if (pixel_format == V4L2_PIX_FMT_JPEG ||
-		pixel_format == V4L2_PIX_FMT_INTERLEAVED) {
-			printk(KERN_INFO "%s V4L2_PIX_FMT_JPEG or INTERLEAVED\n", __func__);
-		s3c_csis_set_format(pdev, MIPI_USER_DEF_PACKET_1);
-	} else if (pixel_format == V4L2_PIX_FMT_SGRBG10)
-		s3c_csis_set_format(pdev, MIPI_CSI_RAW10);
-	else
+	if (pixel_format == V4L2_PIX_FMT_JPEG)
+	{printk(" FMT %s  %d\n",__func__,__LINE__);
+		s3c_csis_set_format(pdev, MIPI_USER_DEF_PACKET_1);}
+	else if (pixel_format == V4L2_PIX_FMT_SGRBG10){
+		printk(" FMT %s  %d\n",__func__,__LINE__);
+		s3c_csis_set_format(pdev, MIPI_CSI_RAW10);}
+	else{ printk(" FMT %s  %d\n",__func__,__LINE__);
 		s3c_csis_set_format(pdev, MIPI_CSI_YCBCR422_8BIT);
+	}
 	s3c_csis_set_resol(pdev, width, height);
 	s3c_csis_update_shadow(pdev);
 #endif
@@ -293,6 +302,9 @@ void s3c_csis_start(int csis_id, int lanes, int settle, int align, int width, \
 	s3c_csis_phy_on(pdev);
 
 	err_print_cnt = 0;
+	///#ifdef CONFIG_VIDEO_S5K4ECGX
+	mipi_start = 1;//zxz 2012-3-21 temp for 5m sensor
+	///#endif
 	info("Samsung MIPI-CSIS%d operation started\n", pdev->id);
 }
 
@@ -300,22 +312,24 @@ void s3c_csis_stop(int csis_id)
 {
 	struct platform_device *pdev = NULL;
 	struct s3c_platform_csis *pdata = NULL;
-
+	printk("\n =======CRYSTALcsis %s %d\n",__func__,__LINE__);
 	pdev = to_platform_device(s3c_csis[csis_id]->dev);
 	pdata = to_csis_plat(&pdev->dev);
 
 	s3c_csis_disable_interrupt(pdev);
 	s3c_csis_system_off(pdev);
 	s3c_csis_phy_off(pdev);
-	s3c_csis[csis_id]->pktdata_enable = 0;
 
-	if (pdata->cfg_phy_global)
-		pdata->cfg_phy_global(0);
+//	if (pdata->cfg_phy_global)
+//		pdata->cfg_phy_global(0);
 
 	if (pdata->clk_off) {
 		if (s3c_csis[csis_id]->clock != NULL)
 			pdata->clk_off(pdev, &s3c_csis[csis_id]->clock);
 	}
+	///#ifdef CONFIG_VIDEO_S5K4ECGX
+	mipi_start = 0;//zxz 2012-3-21 temp for 5m sensor
+	///#endif
 }
 
 static irqreturn_t s3c_csis_irq(int irq, void *dev_id)
@@ -323,44 +337,14 @@ static irqreturn_t s3c_csis_irq(int irq, void *dev_id)
 	u32 cfg;
 
 	struct platform_device *pdev = (struct platform_device *) dev_id;
-	int bufnum = 0;
 	/* just clearing the pends */
 	cfg = readl(s3c_csis[pdev->id]->regs + S3C_CSIS_INTSRC);
 	writel(cfg, s3c_csis[pdev->id]->regs + S3C_CSIS_INTSRC);
 	/* receiving non-image data is not error */
-	cfg &= 0xFFFFFFFF;
-
-#ifdef CONFIG_VIDEO_FIMC_MIPI_IRQ_DEBUG
 	if (unlikely(cfg & S3C_CSIS_INTSRC_ERR)) {
 		if (err_print_cnt < 30) {
 			err("csis error interrupt[%d]: %#x\n", err_print_cnt, cfg);
 			err_print_cnt++;
-		}
-	}
-#endif
-	if(s3c_csis[pdev->id]->pktdata_enable) {
-		if (unlikely(cfg & S3C_CSIS_INTSRC_NON_IMAGE_DATA)) {
-			/* printk(KERN_INFO "%s NON Image Data bufnum = %d 0x%x\n", __func__, bufnum, cfg); */
-
-			if (cfg & S3C_CSIS_INTSRC_EVEN_BEFORE) {
-				/* printk(KERN_INFO "S3C_CSIS_INTSRC_EVEN_BEFORE\n"); */
-				memcpy_fromio(s3c_csis[pdev->id]->bufs.pktdata,
-					(s3c_csis[pdev->id]->regs + S3C_CSIS_PKTDATA_EVEN), CSIS_PKTSIZE);
-			} else if (cfg & S3C_CSIS_INTSRC_EVEN_AFTER) {
-				/* printk(KERN_INFO "S3C_CSIS_INTSRC_EVEN_AFTER\n"); */
-				memcpy_fromio(s3c_csis[pdev->id]->bufs.pktdata,
-					(s3c_csis[pdev->id]->regs + S3C_CSIS_PKTDATA_EVEN), CSIS_PKTSIZE);
-			} else if (cfg & S3C_CSIS_INTSRC_ODD_BEFORE) {
-				/* printk(KERN_INFO "S3C_CSIS_INTSRC_ODD_BEFORE\n"); */
-				memcpy_fromio(s3c_csis[pdev->id]->bufs.pktdata,
-					(s3c_csis[pdev->id]->regs + S3C_CSIS_PKTDATA_ODD), CSIS_PKTSIZE);
-			} else if (cfg & S3C_CSIS_INTSRC_ODD_AFTER) {
-				/* printk(KERN_INFO "S3C_CSIS_INTSRC_ODD_AFTER\n"); */
-				memcpy_fromio(s3c_csis[pdev->id]->bufs.pktdata,
-					(s3c_csis[pdev->id]->regs + S3C_CSIS_PKTDATA_ODD), CSIS_PKTSIZE);
-			}
-			/* printk(KERN_INFO "0x%x\n", s3c_csis[pdev->id]->bufs.pktdata[0x2c/4]); */
-			/* printk(KERN_INFO "0x%x\n", s3c_csis[pdev->id]->bufs.pktdata[0x30/4]); */
 		}
 	}
 

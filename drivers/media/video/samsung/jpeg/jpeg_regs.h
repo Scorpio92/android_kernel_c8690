@@ -41,6 +41,6 @@ void jpeg_start_decode(void __iomem *base);
 void jpeg_start_encode(void __iomem *base);
 unsigned int jpeg_get_int_status(void __iomem *base);
 void jpeg_clear_int(void __iomem *base);
-
+void jpeg_huf_tbl_enable(void __iomem *base);
 #endif /* __JPEG_REGS_H__ */
 

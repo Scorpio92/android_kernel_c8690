@@ -74,11 +74,9 @@ irqreturn_t g2d_irq(int irq, void *dev_id)
 {
 	g2d_set_int_finish(g2d_dev);
 
-	g2d_dev->irq_handled = 1;
+	atomic_set(&g2d_dev->in_use,  0);
 
 	wake_up_interruptible(&g2d_dev->waitq);
-
-	atomic_set(&g2d_dev->in_use, 0);
 
 	return IRQ_HANDLED;
 }
@@ -173,6 +171,8 @@ static long g2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		
 		mutex_lock(&g2d_dev->lock);
 		
+		atomic_set(&g2d_dev->in_use, 1);
+
 		g2d_clk_enable(g2d_dev);
 
 		if (copy_from_user(&params, (struct g2d_params *)arg, sizeof(g2d_params))) {
@@ -180,46 +180,34 @@ static long g2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			goto g2d_ioctl_done;
 		}
 
-		atomic_set(&g2d_dev->in_use, 1);
-		if (atomic_read(&g2d_dev->ready_to_run) == 0)
+		if (!g2d_do_blit(g2d_dev, &params))
 			goto g2d_ioctl_done;
+		
 
-		if (params.flag.memory_type == G2D_MEMORY_USER)
-			down_write(&page_alloc_slow_rwsem);
-
-		g2d_dev->irq_handled = 0;
-		if (!g2d_do_blit(g2d_dev, &params)) {
-			g2d_dev->irq_handled = 1;
-			if (params.flag.memory_type == G2D_MEMORY_USER)
-				up_write(&page_alloc_slow_rwsem);
-			goto g2d_ioctl_done;
-		}
-
-		if(!(file->f_flags & O_NONBLOCK)) {
-			if (!g2d_wait_for_finish(g2d_dev, &params)) {
-				if (params.flag.memory_type == G2D_MEMORY_USER)
-					up_write(&page_alloc_slow_rwsem);
-				goto g2d_ioctl_done;
+		if (!(params.flag.render_mode & G2D_HYBRID_MODE)) {
+			if(!(file->f_flags & O_NONBLOCK)) {             
+				if (!g2d_wait_for_finish(g2d_dev, &params))
+					goto g2d_ioctl_done;
 			}
+		} else {
+			ret = 0;
+			goto g2d_ioctl_done2;
 		}
 
-		if (params.flag.memory_type == G2D_MEMORY_USER)
-			up_write(&page_alloc_slow_rwsem);
 		ret = 0;
 
 		break;
 	default :
-		goto g2d_ioctl_done2;
+		goto g2d_ioctl_done;
 		break;
 	}
 
 g2d_ioctl_done :
 
+	atomic_set(&g2d_dev->in_use, 0);
 	g2d_clk_disable(g2d_dev);
 
 	mutex_unlock(&g2d_dev->lock);
-
-	atomic_set(&g2d_dev->in_use, 0);
 
 g2d_ioctl_done2 :
 
@@ -281,7 +269,7 @@ static int g2d_probe(struct platform_device *pdev)
 	g2d_dev = kzalloc(sizeof(*g2d_dev), GFP_KERNEL);
 	if (!g2d_dev) {
 		FIMG2D_ERROR( "not enough memory\n");
-		ret = -ENOENT;
+		return -ENOENT;
 		goto probe_out;
 	}
 
@@ -296,7 +284,7 @@ static int g2d_probe(struct platform_device *pdev)
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if(res == NULL) {
 		FIMG2D_ERROR("failed to get memory region resouce\n");
-		ret = -ENOENT;
+		return -ENOENT;
 		goto err_get_res;
 	}
 
@@ -306,7 +294,7 @@ static int g2d_probe(struct platform_device *pdev)
 					          pdev->name);
 	if(g2d_dev->mem == NULL) {
 		FIMG2D_ERROR("failed to reserve memory region\n");
-		ret = -ENOENT;
+		return -ENOENT;
 		goto err_mem_req;
 	}
 	
@@ -326,9 +314,6 @@ static int g2d_probe(struct platform_device *pdev)
 		ret = -ENOENT;
 		goto err_irq_req;
 	}
-
-	/* blocking I/O */
-	init_waitqueue_head(&g2d_dev->waitq);
 
 	/* request irq */
 	ret = request_irq(g2d_dev->irq_num, g2d_irq, 
@@ -373,6 +358,9 @@ static int g2d_probe(struct platform_device *pdev)
 		goto err_mem;
 	}
 
+	/* blocking I/O */
+	init_waitqueue_head(&g2d_dev->waitq);
+
 	/* atomic init */
 	atomic_set(&g2d_dev->in_use, 0);
 	atomic_set(&g2d_dev->num_of_object, 0);
@@ -384,7 +372,6 @@ static int g2d_probe(struct platform_device *pdev)
 	if (ret) {
 		FIMG2D_ERROR("cannot register miscdev on minor=%d (%d)\n",
 			G2D_MINOR, ret);
-		ret = -ENOMEM;
 		goto err_misc_reg;
 	}
 
@@ -407,9 +394,9 @@ static int g2d_probe(struct platform_device *pdev)
 	return 0;
 
 err_misc_reg:
-err_mem:
 	clk_put(g2d_dev->clock);
 	g2d_dev->clock = NULL;	
+err_mem:
 err_clk_get3:
 	clk_put(sclk);
 err_clk_get2:

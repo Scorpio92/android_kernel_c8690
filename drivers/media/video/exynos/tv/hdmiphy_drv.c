@@ -9,8 +9,6 @@
  * Free Software Foundation;  either version 2 of the  License, or (at your
  * option) any later version.
  */
-#include "hdmi.h"
-
 #include <linux/module.h>
 #include <linux/i2c.h>
 #include <linux/slab.h>
@@ -20,25 +18,36 @@
 #include <linux/irq.h>
 #include <linux/err.h>
 
+
+#include <plat/gpio-cfg.h>
+#include <mach/regs-gpio.h>
+#include <mach/gpio.h>
+#include <linux/delay.h>
+
 #include <media/v4l2-subdev.h>
+
+#include "hdmi.h"
 
 MODULE_AUTHOR("Tomasz Stanislawski <t.stanislaws@samsung.com>");
 MODULE_DESCRIPTION("Samsung HDMI Physical interface driver");
 MODULE_LICENSE("GPL");
 
-#ifdef DEBUG
-static void hdmiphy_print_reg(u8 *recv_buffer)
-{
-	int i;
 
-	for (i = 1; i <= 32; i++) {
-		printk("[%2x]", recv_buffer[i - 1]);
-		if (!(i % 8) && i)
-			printk("\n");
+static void s5p_hdmi_ctrl_init_private(void)
+{
+	unsigned int err;
+
+	err = gpio_request(EXYNOS4_GPL0(6), "HDMI_IIC_EN");
+	if (err) {
+		printk(KERN_INFO "gpio request HDMI_IIC_EN error : %d\n", err);
+	} else {
+		gpio_direction_output(EXYNOS4_GPL0(6), 0);
+		mdelay(2);
+		gpio_direction_output(EXYNOS4_GPL0(6), 1);
 	}
-	printk("\n");
+	printk("  ===yqf attention:HDMI_IIC_EN \n"); 
 }
-#endif
+
 
 const u8 *hdmiphy_preset2conf(u32 preset)
 {
@@ -49,98 +58,16 @@ const u8 *hdmiphy_preset2conf(u32 preset)
 	return NULL;
 }
 
-static int hdmiphy_ctrl(struct i2c_client *client, u8 reg, u8 bit,
-		u8 *recv_buffer, int en)
-{
-	int ret;
-	u8 buffer[2];
-	struct device *dev = &client->dev;
-
-	buffer[0] = reg;
-	buffer[1] = en ? (recv_buffer[reg] & (~(1 << bit))) :
-			(recv_buffer[reg] | (1 << bit));
-	recv_buffer[reg] = buffer[1];
-
-	ret = i2c_master_send(client, buffer, 2);
-	if (ret != 2) {
-		dev_err(dev, "failed to turn %s HDMIPHY via I2C\n",
-				en ? "on" : "off");
-		return -EIO;
-	}
-
-	return 0;
-}
-
-static int hdmiphy_enable_oscpad(struct i2c_client *client, int on,
-		u8 *recv_buffer)
-{
-	int ret;
-	u8 buffer[2];
-	struct device *dev = &client->dev;
-
-	buffer[0] = 0x0b;
-	if (on)
-		buffer[1] = 0xd8;
-	else
-		buffer[1] = 0x18;
-	recv_buffer[0x0b] = buffer[1];
-
-	ret = i2c_master_send(client, buffer, 2);
-	if (ret != 2) {
-		dev_err(dev, "failed to %s osc pad\n",
-				on ? "enable" : "disable");
-		return -EIO;
-	}
-
-	return 0;
-}
-
 static int hdmiphy_s_power(struct v4l2_subdev *sd, int on)
 {
-	u8 recv_buffer[32];
-	u8 buffer[2];
-	struct i2c_client *client = v4l2_get_subdevdata(sd);
-	struct device *dev = &client->dev;
-
-	memset(recv_buffer, 0, sizeof(recv_buffer));
-
-	dev_dbg(dev, "%s: hdmiphy is %s\n", __func__, on ? "on" : "off");
-
-	buffer[0] = 0x1;
-	i2c_master_send(client, buffer, 1);
-	i2c_master_recv(client, recv_buffer, 32);
-
-#ifdef DEBUG
-	hdmiphy_print_reg(recv_buffer);
-#endif
-
-	if (!on)
-		hdmiphy_enable_oscpad(client, 0, recv_buffer);
-
-	hdmiphy_ctrl(client, 0x1d, 0x7, recv_buffer, on);
-	hdmiphy_ctrl(client, 0x1d, 0x0, recv_buffer, on);
-	hdmiphy_ctrl(client, 0x1d, 0x1, recv_buffer, on);
-	hdmiphy_ctrl(client, 0x1d, 0x2, recv_buffer, on);
-	hdmiphy_ctrl(client, 0x1d, 0x4, recv_buffer, on);
-	hdmiphy_ctrl(client, 0x1d, 0x5, recv_buffer, on);
-	hdmiphy_ctrl(client, 0x1d, 0x6, recv_buffer, on);
-
-	if (!on)
-		hdmiphy_ctrl(client, 0x4, 0x3, recv_buffer, 0);
-
-#ifdef DEBUG
-	buffer[0] = 0x1;
-	i2c_master_send(client, buffer, 1);
-	i2c_master_recv(client, recv_buffer, 32);
-
-	hdmiphy_print_reg(recv_buffer);
-#endif
+	/* to be implemented */
 	return 0;
 }
 
 static int hdmiphy_s_dv_preset(struct v4l2_subdev *sd,
 	struct v4l2_dv_preset *preset)
 {
+	int i;
 	const u8 *data;
 	u8 buffer[32];
 	u8 recv_buffer[32];
@@ -157,10 +84,13 @@ static int hdmiphy_s_dv_preset(struct v4l2_subdev *sd,
 
 	memset(recv_buffer, 0, 32);
 
-#ifdef DEBUG
 	i2c_master_recv(client, recv_buffer, 32);
-	hdmiphy_print_reg(recv_buffer);
-#endif
+	for (i = 0; i < 32; i++) {
+		dev_dbg(dev, "[%x]", recv_buffer[i]);
+		if (!(i % 8) && i)
+			dev_dbg(dev, "\n");
+	}
+	dev_dbg(dev, "\n");
 
 	/* storing configuration to the device */
 	memcpy(buffer, data, 32);
@@ -170,10 +100,13 @@ static int hdmiphy_s_dv_preset(struct v4l2_subdev *sd,
 		return -EIO;
 	}
 
-#ifdef DEBUG
 	i2c_master_recv(client, recv_buffer, 32);
-	hdmiphy_print_reg(recv_buffer);
-#endif
+	for (i = 0; i < 32; i++) {
+		dev_dbg(dev, "[%x]", recv_buffer[i]);
+		if (!(i % 8) && i)
+			dev_dbg(dev, "\n");
+	}
+	dev_dbg(dev, "\n");
 
 	return 0;
 }
@@ -218,7 +151,7 @@ static int __devinit hdmiphy_probe(struct i2c_client *client,
 	static struct v4l2_subdev sd;
 
 	printk("hdmiphy_probe start\n");
-
+	s5p_hdmi_ctrl_init_private();//yulu
 	v4l2_i2c_subdev_init(&sd, client, &hdmiphy_ops);
 	dev_info(&client->dev, "probe successful\n");
 	return 0;

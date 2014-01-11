@@ -119,9 +119,11 @@ int mfc_start(struct mfc_dev *dev)
 	dev->fw.state = mfc_load_firmware(dev->fw.info->data, dev->fw.info->size);
 	*/
 
+	//mfc_clock_on();
 	mfc_clock_on(dev);
 
 	if (mfc_reset() == false) {
+		//mfc_clock_off();
 		mfc_clock_off(dev);
 		return MFC_FAIL;
 	}
@@ -131,12 +133,14 @@ int mfc_start(struct mfc_dev *dev)
 
 	ret = mfc_cmd_fw_start(dev);
 	if (ret < 0) {
+		//mfc_clock_off();
 		mfc_clock_off(dev);
 		return ret;
 	}
 
 	ret = mfc_cmd_sys_init(dev);
 
+	//mfc_clock_off();
 	mfc_clock_off(dev);
 
 	return ret;
@@ -146,12 +150,14 @@ int mfc_sleep(struct mfc_dev *dev)
 {
 	int ret;
 
+	//mfc_clock_on();
 	mfc_clock_on(dev);
 
 	/* FIXME: add SFR backup? */
 
 	ret = mfc_cmd_sys_sleep(dev);
 
+	//mfc_clock_off();
 	mfc_clock_off(dev);
 
 	/* FIXME: add mfc_power_off()? */
@@ -166,9 +172,11 @@ int mfc_wakeup(struct mfc_dev *dev)
 
 	/* FIXME: add mfc_power_on()? */
 
+	//mfc_clock_on();
 	mfc_clock_on(dev);
 
 	if (mfc_reset() == false) {
+		//mfc_clock_off();
 		mfc_clock_off(dev);
 		return MFC_FAIL;
 	}
@@ -178,6 +186,7 @@ int mfc_wakeup(struct mfc_dev *dev)
 
 	ret = mfc_cmd_sys_wakeup(dev);
 
+	//mfc_clock_off();
 	mfc_clock_off(dev);
 
 	/* FIXME: ret = 0 */

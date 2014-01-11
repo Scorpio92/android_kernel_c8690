@@ -36,13 +36,10 @@ void flite_hw_set_cam_channel(struct flite_dev *dev)
 {
 	u32 cfg = readl(dev->regs + FLITE_REG_CIGENERAL);
 
-	cfg &= ~FLITE_REG_CIGENERAL0_MASK;
 	if (dev->id == 0)
-		cfg |= FLITE_REG_CIGENERAL0_CAM_A;
-	else if (dev->id == 1)
-		cfg |= FLITE_REG_CIGENERAL0_CAM_B;
+		cfg &= FLITE_REG_CIGENERAL_CAM_A;
 	else
-		cfg |= FLITE_REG_CIGENERAL0_CAM_C;
+		cfg |= FLITE_REG_CIGENERAL_CAM_B;
 
 	writel(cfg, dev->regs + FLITE_REG_CIGENERAL);
 }
@@ -159,32 +156,6 @@ void flite_hw_set_output_dma(struct flite_dev *dev, bool enable)
 		cfg &= ~FLITE_REG_CIGCTRL_ODMA_DISABLE;
 	else
 		cfg |= FLITE_REG_CIGCTRL_ODMA_DISABLE;
-
-	writel(cfg, dev->regs + FLITE_REG_CIGCTRL);
-}
-
-void flite_hw_set_output_gscaler(struct flite_dev *dev, bool enable)
-{
-	u32 cfg = 0;
-	cfg = readl(dev->regs + FLITE_REG_CIGCTRL);
-
-	if (enable)
-		cfg &= ~FLITE_REG_CIGCTRL_OUT_GSCL_ENABLE;
-	else
-		cfg |= FLITE_REG_CIGCTRL_OUT_GSCL_ENABLE;
-
-	writel(cfg, dev->regs + FLITE_REG_CIGCTRL);
-}
-
-void flite_hw_set_output_isp(struct flite_dev *dev, bool enable)
-{
-	u32 cfg = 0;
-	cfg = readl(dev->regs + FLITE_REG_CIGCTRL);
-
-	if (enable)
-		cfg &= ~FLITE_REG_CIGCTRL_OUT_LOCAL_ENABLE;
-	else
-		cfg |= FLITE_REG_CIGCTRL_OUT_LOCAL_ENABLE;
 
 	writel(cfg, dev->regs + FLITE_REG_CIGCTRL);
 }
@@ -317,60 +288,12 @@ void flite_hw_set_dma_offset(struct flite_dev *dev)
 	writel(cfg, dev->regs + FLITE_REG_CIOOFF);
 }
 
-void flite_hw_set_framecnt_seq(struct flite_dev *dev, u32 index, u32 enable)
-{
-	u32 cfg = readl(dev->regs + FLITE_REG_CIFCNTSEQ);
-	u32 mask = (1 << index);
-
-	cfg &= (~mask);
-	cfg |= (enable << index);
-
-	writel(cfg, dev->regs + FLITE_REG_CIFCNTSEQ);
-}
-
-void flite_hw_set_framecnt_seq_masking(struct flite_dev *dev, u32 buf_cnt)
-{
-	u32 cfg = 0;
-	int mask = buf_cnt - 1;
-
-	do {
-		cfg |= (1 << mask);
-		mask--;
-	} while (mask >= 0);
-
-	writel(cfg, dev->regs + FLITE_REG_CIFCNTSEQ);
-}
-
-int flite_hw_get_framecnt_before(struct flite_dev *dev)
-{
-	u32 cfg = 0;
-
-	cfg = readl(dev->regs + FLITE_REG_CISTATUS3);
-	cfg &= FLITE_REG_CISTATUS3_FRAMECNT_BEFORE;
-
-	return cfg >> 7;
-}
-
-int flite_hw_get_framecnt_present(struct flite_dev *dev)
-{
-	u32 cfg = 0;
-
-	cfg = readl(dev->regs + FLITE_REG_CISTATUS3);
-	cfg &= FLITE_REG_CISTATUS3_FRAMECNT_BEFORE;
-
-	return cfg;
-}
-
 void flite_hw_set_output_addr(struct flite_dev *dev,
 			     struct flite_addr *addr, int index)
 {
 	flite_dbg("dst_buf[%d]: 0x%X", index, addr->y);
 
-	if (soc_is_exynos5250_rev1) {
-		writel(addr->y, dev->regs + FLITE_REG_CIOSA(index));
-	} else {
-		writel(addr->y, dev->regs + FLITE_REG_CIOSA(0));
-	}
+	writel(addr->y, dev->regs + FLITE_REG_CIOSA);
 }
 
 void flite_hw_set_out_order(struct flite_dev *dev)

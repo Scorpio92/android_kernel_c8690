@@ -29,7 +29,7 @@
 #include <linux/workqueue.h>
 
 #include <linux/videodev2.h>
-#include <linux/videodev2_exynos_camera.h>
+#include <linux/videodev2_samsung.h>
 #include <media/videobuf2-core.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-ioctl.h>
@@ -40,12 +40,16 @@
 #include <linux/firmware.h>
 #include <linux/dma-mapping.h>
 #include <linux/vmalloc.h>
+#include <linux/miscdevice.h>
 
 #include "fimc-is-core.h"
 #include "fimc-is-regs.h"
 #include "fimc-is-param.h"
 #include "fimc-is-cmd.h"
 #include "fimc-is-err.h"
+
+struct v4l2_subdev 	*fimc_is_sd = NULL;
+
 
 /* Binary load functions */
 static int fimc_is_request_firmware(struct fimc_is_dev *dev)
@@ -174,7 +178,7 @@ out:
 		set_fs(old_fs);
 	}
 #endif
-	printk(KERN_INFO "FIMC_IS FW loaded = 0x%08x\n", dev->mem.base);
+	printk(KERN_INFO "FIMC-IS FW loaded = 0x%08x\n", dev->mem.base);
 	return ret;
 }
 
@@ -192,15 +196,30 @@ static int fimc_is_load_setfile(struct fimc_is_dev *dev)
 	ret = 0;
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
-	fp = filp_open(FIMC_IS_SETFILE_SDCARD, O_RDONLY, 0);
-	if (IS_ERR(fp)) {
-		dbg("failed to open %s\n", FIMC_IS_SETFILE_SDCARD);
-		goto request_fw;
-	}
+	if ((dev->sensor.sensor_type == SENSOR_S5K3H7_CSI_A) ||
+		(dev->sensor.sensor_type == SENSOR_S5K3H7_CSI_B)){
+		fp = filp_open(FIMC_IS_SETFILE_SDCARD_3H7, O_RDONLY, 0);
+                if (IS_ERR(fp)) {
+		        dbg("failed to open %s\n", FIMC_IS_SETFILE_SDCARD_3H7);
+		        goto request_fw;
+	        }
+        }
+	else{
+		fp = filp_open(FIMC_IS_SETFILE_SDCARD_6A3, O_RDONLY, 0);
+	        if (IS_ERR(fp)) {
+		        dbg("failed to open %s\n", FIMC_IS_SETFILE_SDCARD_6A3);
+		        goto request_fw;
+	        }
+        }
 	fw_requested = 0;
 	fsize = fp->f_path.dentry->d_inode->i_size;
-	dbg("start, file path %s, size %ld Bytes\n",
-		FIMC_IS_SETFILE_SDCARD, fsize);
+	if ((dev->sensor.sensor_type == SENSOR_S5K3H7_CSI_A) ||
+		(dev->sensor.sensor_type == SENSOR_S5K3H7_CSI_B))
+	        dbg("start, file path %s, size %ld Bytes\n",
+			FIMC_IS_SETFILE_SDCARD_3H7, fsize);
+	else
+		dbg("start, file path %s, size %ld Bytes\n",
+			FIMC_IS_SETFILE_SDCARD_6A3, fsize);
 	buf = vmalloc(fsize);
 	if (!buf) {
 		err("failed to allocate memory\n");
@@ -226,7 +245,7 @@ static int fimc_is_load_setfile(struct fimc_is_dev *dev)
 			(void *)phys_to_virt(dev->mem.setfile_ref_base),
 			fsize + 1);
 		dev->setfile.size = fsize;
-	}
+	}		
 #elif defined(CONFIG_VIDEOBUF2_ION)
 	if (dev->mem.bitproc_buf == 0) {
 		err("failed to load FIMC-IS F/W, FIMC-IS will not working\n");
@@ -245,8 +264,15 @@ request_fw:
 	if (fw_requested) {
 		set_fs(old_fs);
 #endif
-		ret = request_firmware((const struct firmware **)&fw_blob,
-					FIMC_IS_SETFILE, &dev->pdev->dev);
+		if ((dev->sensor.sensor_type == SENSOR_S5K3H7_CSI_A) ||
+			(dev->sensor.sensor_type == SENSOR_S5K3H7_CSI_B))
+			ret = request_firmware(
+					(const struct firmware **)&fw_blob,
+					FIMC_IS_SETFILE_3H7, &dev->pdev->dev);
+		else
+			ret = request_firmware(
+					(const struct firmware **)&fw_blob,
+					FIMC_IS_SETFILE_6A3, &dev->pdev->dev);
 		if (ret) {
 			dev_err(&dev->pdev->dev,
 				"could not load firmware (err=%d)\n", ret);
@@ -324,11 +350,11 @@ static int fimc_is_load_fw(struct v4l2_subdev *sd)
 		fimc_is_mem_cache_clean((void *)phys_to_virt(dev->mem.base),
 							dev->fw.size + 1);
 	} else {
-		ret = fimc_is_request_firmware(dev);
-		if (ret) {
-			err("failed to fimc_is_request_firmware (%d)\n", ret);
-			return -EINVAL;
-		}
+	ret = fimc_is_request_firmware(dev);
+	if (ret) {
+		err("failed to fimc_is_request_firmware (%d)\n", ret);
+		return -EINVAL;
+	}
 	}
 	/* 2. Init GPIO (UART) */
 	ret = fimc_is_hw_io_init(dev);
@@ -342,6 +368,7 @@ static int fimc_is_load_fw(struct v4l2_subdev *sd)
 	fimc_is_mem_cache_clean((void *)IS_SHARED,
 		(unsigned long)(sizeof(struct is_share_region)));
 	/* 4. A5 power on */
+	printk(KERN_INFO "FIMC-IS A5 power on\n");
 	fimc_is_hw_a5_power(dev, 1);
 	ret = wait_event_timeout(dev->irq_queue1,
 		test_bit(IS_ST_FW_LOADED, &dev->state),
@@ -365,16 +392,12 @@ int fimc_is_s_power(struct v4l2_subdev *sd, int on)
 	struct device *dev = &is_dev->pdev->dev;
 	int ret = 0;
 
-	printk(KERN_INFO "%s++ %d\n", __func__, on);
+	dbg("fimc_is_s_power\n");
 	if (on) {
 		if (test_bit(IS_PWR_ST_POWERON, &is_dev->power)) {
 			err("FIMC-IS was already power on state!!\n");
 			return ret;
 		}
-#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
-		/* lock bus frequency */
-		dev_lock(is_dev->bus_dev, dev, BUS_LOCK_FREQ_L1);
-#endif
 		fimc_is_hw_set_low_poweroff(is_dev, false);
 		ret = pm_runtime_get_sync(dev);
 		set_bit(IS_ST_A5_PWR_ON, &is_dev->state);
@@ -383,7 +406,6 @@ int fimc_is_s_power(struct v4l2_subdev *sd, int on)
 			err("FIMC-IS was already power off state!!\n");
 			err("Close sensor - %d\n", is_dev->sensor.id);
 			fimc_is_hw_close_sensor(is_dev, 0);
-			printk(KERN_INFO "%s Wait close sensor interrupt\n", __func__);
 			ret = wait_event_timeout(is_dev->irq_queue1,
 				!test_bit(IS_ST_OPEN_SENSOR,
 				&is_dev->power), FIMC_IS_SHUTDOWN_TIMEOUT);
@@ -394,31 +416,23 @@ int fimc_is_s_power(struct v4l2_subdev *sd, int on)
 				is_dev->p_region_index1 = 0;
 				is_dev->p_region_index2 = 0;
 				atomic_set(&is_dev->p_region_num, 0);
-				printk(KERN_INFO "%s already power off return\n", __func__);
 				return ret;
 			}
 		}
 
-		printk(KERN_INFO "%s sub ip power off ++\n", __func__);
-
 		if (!test_bit(IS_PWR_SUB_IP_POWER_OFF, &is_dev->power)) {
-			printk(KERN_INFO "%s Sub ip is alive\n", __func__);
 			fimc_is_hw_subip_poweroff(is_dev);
-			printk(KERN_INFO "%s Wait Sub ip power off\n", __func__);
 			ret = wait_event_timeout(is_dev->irq_queue1,
 				test_bit(IS_PWR_SUB_IP_POWER_OFF,
 				&is_dev->power), FIMC_IS_SHUTDOWN_TIMEOUT);
 			if (!ret) {
-				err("%s wait timeout\n", __func__);
+				err("wait timeout : %s\n", __func__);
 				fimc_is_hw_set_low_poweroff(is_dev, true);
 			}
-		} else
-			printk(KERN_INFO "%s sub ip was already power off state!!\n", __func__);
+		}
 
-		printk(KERN_INFO "%s sub ip power off --\n", __func__);
-
+		printk(KERN_INFO "FIMC-IS A5 power off\n");
 		fimc_is_hw_a5_power(is_dev, 0);
-		printk(KERN_INFO "A5 power off\n");
 		ret = pm_runtime_put_sync(dev);
 
 		is_dev->sensor.id = 0;
@@ -433,8 +447,6 @@ int fimc_is_s_power(struct v4l2_subdev *sd, int on)
 		is_dev->af.mode = IS_FOCUS_MODE_IDLE;
 		set_bit(IS_PWR_ST_POWEROFF, &is_dev->power);
 	}
-	printk(KERN_INFO "%s --\n", __func__);
-
 	return ret;
 }
 
@@ -481,7 +493,7 @@ static int fimc_is_init_set(struct v4l2_subdev *sd, u32 val)
 			(void *)phys_to_virt(dev->mem.base + dev->setfile.base),
 			dev->setfile.size + 1);
 	} else {
-		fimc_is_load_setfile(dev);
+	fimc_is_load_setfile(dev);
 	}
 	clear_bit(IS_ST_SETFILE_LOADED, &dev->state);
 	fimc_is_hw_load_setfile(dev);
@@ -489,7 +501,7 @@ static int fimc_is_init_set(struct v4l2_subdev *sd, u32 val)
 		test_bit(IS_ST_SETFILE_LOADED, &dev->state),
 		FIMC_IS_SHUTDOWN_TIMEOUT);
 	if (!ret) {
-		err("wait timeout - get setfile address\n");
+		err("wait timeout - load setfile\n");
 		fimc_is_hw_set_low_poweroff(dev, true);
 		return -EINVAL;
 	}
@@ -583,6 +595,9 @@ static int fimc_is_init_set(struct v4l2_subdev *sd, u32 val)
 #ifdef MSG_CONFIG_COTROL
 	fimc_is_hw_set_debug_level(dev, FIMC_IS_DEBUG_MSG, FIMC_IS_DEBUG_LEVEL);
 #endif
+
+	fimc_is_sd = sd;
+
 	return ret;
 }
 
@@ -616,10 +631,6 @@ static int fimc_is_reset(struct v4l2_subdev *sd, u32 val)
 	is_dev->af.mode = IS_FOCUS_MODE_IDLE;
 	set_bit(IS_PWR_ST_POWEROFF, &is_dev->power);
 	/* Restart */
-#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
-	/* lock bus frequency */
-	dev_lock(is_dev->bus_dev, dev, BUS_LOCK_FREQ_L1);
-#endif
 	fimc_is_hw_set_low_poweroff(is_dev, false);
 	ret = pm_runtime_get_sync(dev);
 	set_bit(IS_ST_A5_PWR_ON, &is_dev->state);
@@ -640,6 +651,14 @@ static int fimc_is_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	case V4L2_CID_CAMERA_EXIF_EXPTIME: /* Exposure Time */
 		fimc_is_mem_cache_inv((void *)IS_HEADER,
 			(unsigned long)(sizeof(struct is_frame_header)*4));
+#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628-- add for sync exif informaiton.
+		if ((dev->scenario_id == ISS_PREVIEW_STILL) ||
+			(dev->scenario_id == ISS_PREVIEW_VIDEO)) {
+			ctrl->value =  dev->is_p_region->header
+				[dev->frame_count%MAX_FRAME_COUNT_PREVIEW].
+                          exif.exposure_time.den;
+		} else
+#endif				
 		ctrl->value = dev->is_p_region->header[0].
 			exif.exposure_time.den;
 		break;
@@ -647,12 +666,37 @@ static int fimc_is_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	case V4L2_CID_CAMERA_EXIF_FLASH: /* Flash */
 		fimc_is_mem_cache_inv((void *)IS_HEADER,
 			(unsigned long)(sizeof(struct is_frame_header)*4));
-		ctrl->value = dev->is_p_region->header[0].exif.flash;
+#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628-- add for sync exif informaiton.
+		if ((dev->scenario_id == ISS_PREVIEW_STILL) ||
+			(dev->scenario_id == ISS_PREVIEW_VIDEO)) {
+				ctrl->value = dev->is_p_region->header
+				        [dev->frame_count%MAX_FRAME_COUNT_PREVIEW].
+				        exif.flash;
+		} else
+#endif		
+			ctrl->value = dev->is_p_region->header[0].exif.flash;
+/*
+		dbg("flash exif %d:%d:%d:%d, %d:%d",  
+			dev->is_p_region->header[0].exif.flash,
+			dev->is_p_region->header[1].exif.flash,
+			dev->is_p_region->header[2].exif.flash,
+			dev->is_p_region->header[3].exif.flash,
+			dev->frame_count,
+			(dev->frame_count-1)%MAX_FRAME_COUNT_PREVIEW);
+*/
 		break;
 	case V4L2_CID_IS_CAMERA_EXIF_ISO:
 	case V4L2_CID_CAMERA_EXIF_ISO: /* ISO Speed Rating */
 		fimc_is_mem_cache_inv((void *)IS_HEADER,
 			(unsigned long)(sizeof(struct is_frame_header)*4));
+#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628-- add for sync exif informaiton.
+		if ((dev->scenario_id == ISS_PREVIEW_STILL) ||
+			(dev->scenario_id == ISS_PREVIEW_VIDEO)) {
+                       ctrl->value = dev->is_p_region->header
+					   	[dev->frame_count%MAX_FRAME_COUNT_PREVIEW].
+			                   exif.iso_speed_rating;
+		} else
+#endif		
 		ctrl->value = dev->is_p_region->header[0].
 			exif.iso_speed_rating;
 		break;
@@ -661,19 +705,51 @@ static int fimc_is_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 		fimc_is_mem_cache_inv((void *)IS_HEADER,
 			(unsigned long)(sizeof(struct is_frame_header)*4));
 		/* Exposure time = shutter speed by FW */
+#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628-- add for sync exif informaiton.
+		if ((dev->scenario_id == ISS_PREVIEW_STILL) ||
+			(dev->scenario_id == ISS_PREVIEW_VIDEO)) {
+                       ctrl->value = dev->is_p_region->header
+					   	[dev->frame_count%MAX_FRAME_COUNT_PREVIEW].
+			                   exif.shutter_speed.den;
+		} else
+#endif		
 		ctrl->value = dev->is_p_region->header[0].
-			exif.exposure_time.den;
+			exif.shutter_speed.den;
 		break;
 	case V4L2_CID_IS_CAMERA_EXIF_BRIGHTNESS:
 	case V4L2_CID_CAMERA_EXIF_BV: /* Brightness */
 		fimc_is_mem_cache_inv((void *)IS_HEADER,
 			(unsigned long)(sizeof(struct is_frame_header)*4));
+#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628-- add for sync exif informaiton.
+		if ((dev->scenario_id == ISS_PREVIEW_STILL) ||
+			(dev->scenario_id == ISS_PREVIEW_VIDEO)) {
+                       ctrl->value = dev->is_p_region->header
+				[dev->frame_count%MAX_FRAME_COUNT_PREVIEW].
+			                   exif.brightness.num;
+		} else
+#endif		
 		ctrl->value = dev->is_p_region->header[0].exif.brightness.num;
 		break;
 	case V4L2_CID_CAMERA_EXIF_EBV: /* exposure bias */
+#if 1
+	//FW not update the header infor, use value from interrupt. Jiangshanbin 2012/07/03
+	if (dev->frame_count+1 >= dev->adjust.exposure.frame_end)
+		ctrl->value = dev->adjust.exposure.value;
+	else
+		ctrl->value = dev->adjust.exposure.old_value;
+#else
 		fimc_is_mem_cache_inv((void *)IS_HEADER,
 			(unsigned long)(sizeof(struct is_frame_header)*4));
+#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628-- add for sync exif informaiton.
+		if ((dev->scenario_id == ISS_PREVIEW_STILL) ||
+			(dev->scenario_id == ISS_PREVIEW_VIDEO)) {
+                       ctrl->value = dev->is_p_region->header
+					   	[dev->frame_count%MAX_FRAME_COUNT_PREVIEW].
+			                   exif.brightness.den;
+		} else
+#endif		
 		ctrl->value = dev->is_p_region->header[0].exif.brightness.den;
+#endif
 		break;
 	/* Get x and y offset of sensor  */
 	case V4L2_CID_IS_GET_SENSOR_OFFSET_X:
@@ -742,6 +818,15 @@ static int fimc_is_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 			ctrl->value =
 				dev->is_p_region->header[0].frame_number;
 		}
+	/*	
+		err("frame num %x:%x:%x:%x, %x:%d",  
+			dev->is_p_region->header[0].frame_number,
+			dev->is_p_region->header[1].frame_number,
+			dev->is_p_region->header[2].frame_number,
+			dev->is_p_region->header[3].frame_number,
+			dev->frame_count,
+			(dev->frame_count)%MAX_FRAME_COUNT_PREVIEW);
+	*/
 		break;
 	case V4L2_CID_IS_GET_LOSTED_FRAME_NUMBER:
 		fimc_is_mem_cache_inv((void *)IS_HEADER,
@@ -816,20 +901,54 @@ static int fimc_is_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	case V4L2_CID_IS_FW_DEBUG_REGION_ADDR:
 		ctrl->value = dev->mem.base + FIMC_IS_DEBUG_REGION_ADDR;
 		break;
-#if defined(CONFIG_SLP)
-#define FRONT_CAM_STANDARD_REVISION	0x0b
-	case V4L2_CID_PHYSICAL_ROTATION:
-		if (system_rev > FRONT_CAM_STANDARD_REVISION || \
-			system_rev == 0x04 || system_rev == 0x06)
-			ctrl->value = IS_ROTATION_270;
-		else
-			ctrl->value = IS_ROTATION_90;
+
+	case V4L2_CID_IS_AF_LOST_STATE:
+		ctrl->value = dev->af.af_lost_state;
+		//printk("\n++++(%s)V4L2_CID_IS_AF_LOST_STATE:%d",__func__,ctrl->value);
 		break;
-#endif
+      /* FLASH LED on/off info */
+	case V4L2_CID_IS_FLASH_ON_OFF :
+		printk("----V4L2_CID_IS_FLASH_ON_OFF\n");
+		if(dev->flash.led_on == ISP_CAMERA_FLASH_SUCCESS)
+			ctrl->value = 1;
+		else
+			ctrl->value = 0;	
+		break;
+
+	case V4L2_CID_IS_FD_GET_FACE_COUNT:
+		if (dev->faceinfo_array->number > 0) {
+			ctrl->value = dev->faceinfo_array->faceinfo[dev->faceinfo_array->read].count;
+		} else {
+			ctrl->value = 0;
+		}
+		break;
+	case V4L2_CID_IS_FD_GET_FACE_BLINK_LEVEL:
+		if (dev->faceinfo_array->number > 0) {
+			ctrl->value = dev->faceinfo_array->faceinfo[dev->faceinfo_array->read].face[ctrl->value].blink_level;
+		} else {
+			ctrl->value = 0;
+		}
+		break;
+	case V4L2_CID_IS_FD_GET_NEXT:
+		if (dev->faceinfo_array->number > 0) {
+			dev->faceinfo_array->number--;
+			dev->faceinfo_array->read = (dev->faceinfo_array->read + 1) % MAX_FRAME_COUNT;
+		}
+		break;
+
 	default:
 		return -EINVAL;
 	}
 	return ret;
+}
+
+void fimc_is_frame_delay(struct fimc_is_dev *dev, int frame_num)
+{
+	int curr_frame_count =0;
+
+	curr_frame_count = dev->frame_count + frame_num;
+	wait_event_timeout(dev->irq_queue1,
+					(dev->frame_count >= curr_frame_count),HZ);
 }
 
 static int fimc_is_v4l2_digital_zoom(struct fimc_is_dev *dev, int zoom_factor)
@@ -1020,9 +1139,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_AUTO);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_ENABLE);
@@ -1036,15 +1158,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_PORTRAIT:
 		/* ISO */
@@ -1078,9 +1212,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_AUTO);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_ENABLE);
@@ -1095,15 +1232,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_LANDSCAPE:
 		/* ISO */
@@ -1137,9 +1286,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 1);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
@@ -1154,15 +1306,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_SPORTS:
 		/* ISO */
@@ -1196,9 +1360,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
@@ -1213,15 +1380,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_PARTY_INDOOR:
 		/* ISO */
@@ -1255,9 +1434,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 1);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_AUTO);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_ENABLE);
@@ -1272,15 +1454,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_BEACH_SNOW:
 		/* ISO */
@@ -1314,9 +1508,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 1);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
@@ -1331,15 +1528,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_SUNSET:
 		/* ISO */
@@ -1374,9 +1583,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
@@ -1391,15 +1603,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_DUSK_DAWN:
 		/* ISO */
@@ -1435,9 +1659,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
@@ -1452,15 +1679,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_FALL_COLOR:
 		/* ISO */
@@ -1495,9 +1734,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 2);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
@@ -1512,15 +1754,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_NIGHTSHOT:
 		/* ISO */
@@ -1555,9 +1809,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
@@ -1572,15 +1829,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_BACK_LIGHT:
 		/* ISO */
@@ -1615,9 +1884,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
@@ -1631,16 +1903,28 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		dev->af.af_state = FIMC_IS_AF_SETCONFIG;
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	/* FIXME add with SCENE_MODE_BACK_LIGHT (FLASH mode) */
 	case SCENE_MODE_FIREWORKS:
@@ -1676,9 +1960,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
@@ -1693,15 +1980,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_TEXT:
 		/* ISO */
@@ -1736,9 +2035,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
@@ -1753,15 +2055,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 		IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	case SCENE_MODE_CANDLE_LIGHT:
 		/* ISO */
@@ -1796,9 +2110,12 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_BRIGHTNESS(dev, 0);
 		IS_ISP_SET_PARAM_ADJUST_HUE(dev, 0);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_ISP_SET_PARAM_ADJUST_ERR(dev, ISP_ADJUST_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
+#ifndef CONFIG_MACH_STUTTGART
 		/* Flash */
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
 		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
@@ -1813,15 +2130,27 @@ static int fimc_is_v4l2_isp_scene_mode(struct fimc_is_dev *dev, int mode)
 		IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
 		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 		IS_ISP_SET_PARAM_AA_ERR(dev, ISP_AF_ERROR_NO);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
+#endif
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 		break;
 	default:
 		break;
@@ -1849,6 +2178,7 @@ int fimc_is_wait_af_done(struct fimc_is_dev *dev)
 	return 0;
 }
 
+
 int fimc_is_af_face(struct fimc_is_dev *dev)
 {
 	int ret = 0, max_confidence = 0, i = 0;
@@ -1857,12 +2187,13 @@ int fimc_is_af_face(struct fimc_is_dev *dev)
 
 	for (i = dev->fd_header.index;
 		i < (dev->fd_header.index + dev->fd_header.count); i++) {
-		if (max_confidence < dev->is_p_region->face[i].confidence) {
-			max_confidence = dev->is_p_region->face[i].confidence;
-			touch_x = dev->is_p_region->face[i].face.offset_x +
-				(dev->is_p_region->face[i].face.width / 2);
-			touch_y = dev->is_p_region->face[i].face.offset_y +
-				(dev->is_p_region->face[i].face.height / 2);
+		u32 idx = i % MAX_FACE_COUNT;
+		if (max_confidence < dev->is_p_region->face[idx].confidence) {
+			max_confidence = dev->is_p_region->face[idx].confidence;
+			touch_x = dev->is_p_region->face[idx].face.offset_x +
+				(dev->is_p_region->face[idx].face.width / 2);
+			touch_y = dev->is_p_region->face[idx].face.offset_y +
+				(dev->is_p_region->face[idx].face.height / 2);
 		}
 	}
 	width = fimc_is_hw_get_sensor_size_width(dev);
@@ -1891,9 +2222,12 @@ int fimc_is_af_face(struct fimc_is_dev *dev)
 
 	IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
 	IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
-	IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_TOUCH);
+	IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
 	IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
 	IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+	IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_ENABLE);
+	IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+	
 	IS_ISP_SET_PARAM_AA_TOUCH_X(dev, touch_x);
 	IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, touch_y);
 	IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
@@ -1906,88 +2240,389 @@ int fimc_is_af_face(struct fimc_is_dev *dev)
 	return ret;
 }
 
-static int fimc_is_v4l2_af_mode(struct fimc_is_dev *dev, int value)
+
+int fimc_is_v4l2_af_mode(struct fimc_is_dev *dev, int value)
 {
 	int ret = 0;
+	//printk("---%s value=%d\n",__FUNCTION__,value);
 	switch (value) {
-	case FOCUS_MODE_AUTO:
-		dev->af.mode = IS_FOCUS_MODE_AUTO;
-		break;
-	case FOCUS_MODE_MACRO:
-		dev->af.mode = IS_FOCUS_MODE_MACRO;
-		break;
-	case FOCUS_MODE_INFINITY:
-		dev->af.mode = IS_FOCUS_MODE_INFINITY;
-		IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
-		IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
-		IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_MANUAL);
-		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
-		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
-		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
-		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
-		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
-		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
-		IS_INC_PARAM_NUM(dev);
-		dev->af.af_state = FIMC_IS_AF_SETCONFIG;
-		fimc_is_mem_cache_clean((void *)dev->is_p_region,
+		case FOCUS_MODE_AUTO:
+			//printk("\nlimeng:%s FOCUS_MODE_AUTO",__func__);
+			dev->af.mode = IS_FOCUS_MODE_AUTO;
+			break;
+		case FOCUS_MODE_MACRO:
+			dev->af.mode = IS_FOCUS_MODE_MACRO;
+			break;
+		case FOCUS_MODE_INFINITY:
+			dev->af.mode = IS_FOCUS_MODE_INFINITY;
+			IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
+			IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
+			IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_MANUAL);
+			IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+			IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+			IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+			IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
+			IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
+			IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
+			IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
+			IS_INC_PARAM_NUM(dev);
+			dev->af.af_state = FIMC_IS_AF_SETCONFIG;
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
-		fimc_is_hw_set_param(dev);
-		break;
-	case FOCUS_MODE_CONTINOUS:
-		dev->af.mode = IS_FOCUS_MODE_CONTINUOUS;
-		IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
-		IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
-		IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_CONTINUOUS);
-		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
-		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
-		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
-		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
-		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
-		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
-		IS_INC_PARAM_NUM(dev);
-		dev->af.af_state = FIMC_IS_AF_SETCONFIG;
-		fimc_is_mem_cache_clean((void *)dev->is_p_region,
+			fimc_is_hw_set_param(dev);
+			break;
+		case FOCUS_MODE_CONTINOUS:
+			//printk("\nlimeng:%s FOCUS_MODE_CONTINOUS",__func__);
+			dev->af.mode = IS_FOCUS_MODE_CONTINUOUS;
+			IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
+			IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
+			IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_CONTINUOUS);
+			IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+			IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_ENABLE);
+			IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+			IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
+			IS_ISP_SET_PARAM_AA_TOUCH_X(dev, dev->af.pos_x);
+			IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, dev->af.pos_y);
+			//##mmkim 0612 -- add inner window. 
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_W(dev, dev->af.width); 
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_H(dev, dev->af.height);
+
+			IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
+			IS_INC_PARAM_NUM(dev);
+			dev->af.af_state = FIMC_IS_AF_SETCONFIG;
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
+				IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+				FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+			if (!ret) {
+			err("wait timeout : %s\n", __func__);
+				return -EINVAL;
+			}
+			dev->af.af_lock_state = 0;
+			dev->af.af_lost_state = FIMC_IS_AF_UNKNOWN;
+			dev->af.ae_lock_state = 0;
+			dev->af.awb_lock_state = 0;
+			dev->af.prev_pos_x = 0;
+			dev->af.prev_pos_y = 0;
+			break;
+		case FOCUS_MODE_CONTINOUS_XY:
+			//printk("\nlimeng:%s FOCUS_MODE_CONTINOUS_XY",__func__);
+			dev->af.mode = IS_FOCUS_MODE_CONTINUOUS;
+			IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
+			IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
+			IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
+			IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+			IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_ENABLE);
+			IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_ENABLE);
+			IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+			IS_ISP_SET_PARAM_AA_TOUCH_X(dev, dev->af.pos_x);
+			IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, dev->af.pos_y);
+			//##mmkim 0608 -- add touch inner window. user can modify this value. 
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_W(dev, dev->af.width); 
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_H(dev, dev->af.height);
+
+			IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
+			IS_INC_PARAM_NUM(dev);
+			dev->af.af_state = FIMC_IS_AF_SETCONFIG;
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
-		fimc_is_hw_set_param(dev);
-		dev->af.af_lock_state = 0;
-		dev->af.ae_lock_state = 0;
-		dev->af.awb_lock_state = 0;
-		dev->af.prev_pos_x = 0;
-		dev->af.prev_pos_y = 0;
-		break;
-	case FOCUS_MODE_TOUCH:
-		dev->af.mode = IS_FOCUS_MODE_TOUCH;
-		IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
-		IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
-		IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_TOUCH);
-		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
-		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
-		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, dev->af.pos_x);
-		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, dev->af.pos_y);
-		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
-		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
-		IS_INC_PARAM_NUM(dev);
-		dev->af.af_state = FIMC_IS_AF_SETCONFIG;
-		fimc_is_mem_cache_clean((void *)dev->is_p_region,
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+			FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+			if (!ret) {
+			err("wait timeout : %s\n", __func__);
+				return -EINVAL;
+			}
+			dev->af.af_lock_state = 0;
+			dev->af.af_lost_state = FIMC_IS_AF_UNKNOWN;
+			dev->af.ae_lock_state = 0;
+			dev->af.awb_lock_state = 0;
+			dev->af.prev_pos_x = 0;
+			dev->af.prev_pos_y = 0;
+			break; 
+		case FOCUS_MODE_TOUCH_CONTINUOUS:
+			//printk("\nlimeng:%s FOCUS_MODE_TOUCH_CONTINUOUS",__func__);
+			dev->af.af_lost_count = 0; 
+			dev->af.mode = IS_FOCUS_MODE_TOUCH;
+			IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
+			IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
+			IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
+			IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_ENABLE);
+			IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+			IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+			IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+			IS_ISP_SET_PARAM_AA_TOUCH_X(dev, dev->af.pos_x);
+			IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, dev->af.pos_y);
+			//##mmkim 0612 -- add inner window. 
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_W(dev, dev->af.width); 
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_H(dev, dev->af.height);
+
+			IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
+			IS_INC_PARAM_NUM(dev);
+			dev->af.af_state = FIMC_IS_AF_SETCONFIG;
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
-		fimc_is_hw_set_param(dev);
-		dev->af.af_lock_state = 0;
-		dev->af.ae_lock_state = 0;
-		dev->af.awb_lock_state = 0;
-		break;
-	case FOCUS_MODE_FACEDETECT:
-		dev->af.mode = IS_FOCUS_MODE_FACEDETECT;
-		dev->af.af_lock_state = 0;
-		dev->af.ae_lock_state = 0;
-		dev->af.awb_lock_state = 0;
-		dev->af.prev_pos_x = 0;
-		dev->af.prev_pos_y = 0;
-		break;
-	default:
-		return ret;
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+			FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+			if (!ret) {
+			err("wait timeout : %s\n", __func__);
+				return -EINVAL;
+			}
+			dev->af.af_lock_state = 0;
+			dev->af.ae_lock_state = 0;
+			dev->af.awb_lock_state = 0;
+			break;
+#if 1 //##mmkim -- add for torch flash
+		case FOCUS_MODE_TOUCH_FLASH_AUTO: 
+			//printk("\nlimeng:%s FOCUS_MODE_TOUCH_FLASH",__func__);
+			// 1. send MANUAL ON for pre-flash
+			dev->flash.led_on = 0;
+			IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_MANUALON);
+			IS_ISP_SET_PARAM_FLASH_REDEYE(dev, 1); //pre-flash on
+			IS_ISP_SET_PARAM_FLASH_INTENSITY(dev, 102); //flash on
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+			IS_INC_PARAM_NUM(dev);
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
+				IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),HZ/5);
+			// check the IS_ST_FLASH_READY..
+			clear_bit(IS_ST_FLASH_READY, &dev->state);
+			ret = wait_event_timeout(dev->irq_queue1,
+				test_bit(IS_ST_FLASH_READY, &dev->state),1*HZ);
+
+			if (!ret) {
+				err("\nwait IS_ST_FLASH_READY timeout. \n");
+				return -EINVAL;
+			}
+
+			if (dev->flash.led_on == ISP_CAMERA_FLASH_SUCCESS) { 
+			// 2. send FLASH DISABLE 
+			IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
+			IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+			IS_INC_PARAM_NUM(dev);
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),HZ/5);
+
+			// 3. send MANUAL ON for torch
+			IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_MANUALON);
+			IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE); //torch
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+			IS_INC_PARAM_NUM(dev);
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),HZ/5);
+
+			// check the IS_ST_FLASH_READY..
+			clear_bit(IS_ST_FLASH_READY, &dev->state);
+			ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_FLASH_READY, &dev->state),1*HZ);
+			if (!ret) {
+				err("wait IS_ST_FLASH_READY timeout. \n");
+				return -EINVAL;
+			}
+
+			// 4. send TORCH
+			IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_TORCH);
+			IS_ISP_SET_PARAM_FLASH_REDEYE(dev, 2); //torch
+			IS_ISP_SET_PARAM_FLASH_INTENSITY(dev, 102); //flash on
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+			IS_INC_PARAM_NUM(dev);
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),HZ/5);
+
+			//wait 1frames...
+			fimc_is_frame_delay(dev, 1); 
+			}
+
+			// 5. Continuous AF
+			dev->af.af_lost_count = 0; 
+			dev->af.mode = IS_FOCUS_MODE_TOUCH;
+			IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
+			IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
+			IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
+			IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_ENABLE);
+			IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+			IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+			IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+			IS_ISP_SET_PARAM_AA_TOUCH_X(dev, dev->af.pos_x);
+			IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, dev->af.pos_y);
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_W(dev, dev->af.width); 
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_H(dev, dev->af.height);
+
+			IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
+			IS_INC_PARAM_NUM(dev);
+			dev->af.af_state = FIMC_IS_AF_SETCONFIG;
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
+			IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),HZ/5);
+			dev->af.af_lock_state = 0;
+			dev->af.ae_lock_state = 0;
+			dev->af.awb_lock_state = 0;
+			break; 
+		case FOCUS_MODE_TOUCH_FLASH_ON: 
+			//printk("\nlimeng:%s FOCUS_MODE_TOUCH_FLASH_ON",__func__);
+
+			// 1. send MANUAL ON for torch
+			IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_MANUALON);
+			IS_ISP_SET_PARAM_FLASH_REDEYE(dev, 2); //torch
+			IS_ISP_SET_PARAM_FLASH_INTENSITY(dev, 102); //flash on
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+			IS_INC_PARAM_NUM(dev);
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),HZ/5);
+
+			// check the IS_ST_FLASH_READY..
+			clear_bit(IS_ST_FLASH_READY, &dev->state);
+			ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_FLASH_READY, &dev->state),1*HZ);
+			if (!ret) {
+				err("wait IS_ST_FLASH_READY timeout. \n");
+				return -EINVAL;
+			}
+
+			// 2. send TORCH
+			IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_TORCH);
+			IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+			IS_INC_PARAM_NUM(dev);
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),HZ/5);
+
+			//wait 1frames...
+			fimc_is_frame_delay(dev, 1);
+
+			// 3. Continuous AF
+			//printk("\n==>[MMKIM]FOCUS_MODE_TOUCH_FLASH_ON");
+			dev->af.af_lost_count = 0; 
+			dev->af.mode = IS_FOCUS_MODE_TOUCH;
+			IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
+			IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
+			IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
+			IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_ENABLE);
+			IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+			IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+			IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+			IS_ISP_SET_PARAM_AA_TOUCH_X(dev, dev->af.pos_x);
+			IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, dev->af.pos_y);
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_W(dev, dev->af.width); 
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_H(dev, dev->af.height);
+
+			IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
+			IS_INC_PARAM_NUM(dev);
+			dev->af.af_state = FIMC_IS_AF_SETCONFIG;
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
+			IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+			HZ/5);
+
+			dev->af.af_lock_state = 0;
+			dev->af.ae_lock_state = 0;
+			dev->af.awb_lock_state = 0;
+			break; 
+		case FOCUS_MODE_TOUCH_FLASH_OFF: 
+			//printk("\nlimeng:%s FOCUS_MODE_TOUCH_FLASH_OFF",__func__);
+			// send FLASH DISABLE
+			IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
+			IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+			IS_INC_PARAM_NUM(dev);
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),HZ/5);
+			break; 
+#endif
+		case FOCUS_MODE_TOUCH:
+			//printk("\nlimeng:%s FOCUS_MODE_TOUCH",__func__);
+			dev->af.mode = IS_FOCUS_MODE_TOUCH;
+			IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
+			IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
+			IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
+			IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_ENABLE);
+			IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+			IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+			IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+			IS_ISP_SET_PARAM_AA_TOUCH_X(dev, dev->af.pos_x);
+			IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, dev->af.pos_y);
+			//##mmkim 0608 -- add touch inner window. user can modify this value. 
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_W(dev, dev->af.width); 
+			IS_ISP_SET_PARAM_AA_TOUCH_IW_H(dev, dev->af.height);
+
+			IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
+			IS_INC_PARAM_NUM(dev);
+			dev->af.af_state = FIMC_IS_AF_SETCONFIG;
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
+			IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+			FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+			if (!ret) {
+				err("wait timeout : %s\n", __func__);
+				return -EINVAL;
+			}
+			dev->af.af_lock_state = 0;
+			dev->af.ae_lock_state = 0;
+			dev->af.awb_lock_state = 0;
+			break;
+		case FOCUS_MODE_FACEDETECT:
+			dev->af.mode = IS_FOCUS_MODE_FACEDETECT;
+			dev->af.af_lock_state = 0;
+			dev->af.ae_lock_state = 0;
+			dev->af.awb_lock_state = 0;
+			dev->af.prev_pos_x = 0;
+			dev->af.prev_pos_y = 0;
+			break;
+		default:
+			return ret;
 	}
+	
 	return ret;
 }
+
 
 static int fimc_is_v4l2_af_start_stop(struct fimc_is_dev *dev, int value)
 {
@@ -2006,14 +2641,14 @@ static int fimc_is_v4l2_af_start_stop(struct fimc_is_dev *dev, int value)
 			IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
 			switch (dev->af.mode) {
 			case IS_FOCUS_MODE_AUTO:
-				IS_ISP_SET_PARAM_AA_MODE(dev,
-					ISP_AF_MODE_SINGLE);
-				IS_ISP_SET_PARAM_AA_SCENE(dev,
-					ISP_AF_SCENE_NORMAL);
-				IS_ISP_SET_PARAM_AA_SLEEP(dev,
-					ISP_AF_SLEEP_OFF);
-				IS_ISP_SET_PARAM_AA_FACE(dev,
-					ISP_AF_FACE_DISABLE);
+#ifndef CONFIG_MACH_STUTTGART //##mmkim -- delete AF_SINGLE, Lenovo doesn't use AF_SINGLE
+				IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
+				IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
+				IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+				IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+				IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+				IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 				IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 				IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 				IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
@@ -2023,16 +2658,16 @@ static int fimc_is_v4l2_af_start_stop(struct fimc_is_dev *dev, int value)
 					(void *)dev->is_p_region,
 					IS_PARAM_SIZE);
 				fimc_is_hw_set_param(dev);
+#endif				
 					break;
 			case IS_FOCUS_MODE_MACRO:
-				IS_ISP_SET_PARAM_AA_MODE(dev,
-					ISP_AF_MODE_SINGLE);
-				IS_ISP_SET_PARAM_AA_SCENE(dev,
-					ISP_AF_SCENE_MACRO);
-				IS_ISP_SET_PARAM_AA_SLEEP(dev,
-					ISP_AF_SLEEP_OFF);
-				IS_ISP_SET_PARAM_AA_FACE(dev,
-					ISP_AF_FACE_DISABLE);
+				IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
+				IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_MACRO);
+				IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+				IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+				IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+				IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 				IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 				IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 				IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
@@ -2051,14 +2686,13 @@ static int fimc_is_v4l2_af_start_stop(struct fimc_is_dev *dev, int value)
 				}
 				break;
 			case IS_FOCUS_MODE_CONTINUOUS:
-				IS_ISP_SET_PARAM_AA_MODE(dev,
-					ISP_AF_MODE_CONTINUOUS);
-				IS_ISP_SET_PARAM_AA_SCENE(dev,
-					ISP_AF_SCENE_NORMAL);
-				IS_ISP_SET_PARAM_AA_SLEEP(dev,
-						ISP_AF_SLEEP_OFF);
-				IS_ISP_SET_PARAM_AA_FACE(dev,
-					ISP_AF_FACE_DISABLE);
+				IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_CONTINUOUS);
+				IS_ISP_SET_PARAM_AA_SCENE(dev, ISP_AF_SCENE_NORMAL);
+				IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+				IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+				IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+				IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
 				IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
 				IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
 				IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
@@ -2093,23 +2727,29 @@ static int fimc_is_v4l2_af_start_stop(struct fimc_is_dev *dev, int value)
 			fimc_is_mem_cache_clean((void *)IS_SHARED,
 			(unsigned long)(sizeof(struct is_share_region)));
 		} else {
-			dev->af.af_lock_state = 0;
-			dev->af.ae_lock_state = 0;
-			dev->af.awb_lock_state = 0;
-			dev->is_shared_region->af_status = 0;
-			fimc_is_mem_cache_clean((void *)IS_SHARED,
-			(unsigned long)(sizeof(struct is_share_region)));
-			IS_ISP_SET_PARAM_AA_CMD(dev,
-			ISP_AA_COMMAND_START);
-			IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
-			IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
-			IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
-			IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
-			IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
-			IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
-			IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 			switch (dev->af.mode) {
 			case IS_FOCUS_MODE_AUTO:
+				dev->af.af_lock_state = 0;
+				dev->af.ae_lock_state = 0;
+				dev->af.awb_lock_state = 0;
+				dev->is_shared_region->af_status = 0;
+				fimc_is_mem_cache_clean((void *)IS_SHARED,
+				(unsigned long)(sizeof(struct is_share_region)));
+				IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
+				IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
+#ifndef CONFIG_MACH_STUTTGART //##mmkim -- delete AF_SINGLE, Lenovo doesn't use AF_SINGLE
+				IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
+				IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+				IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+				IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+				IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
+				IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
+				IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
+				IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
+                                if (dev->af.mode == IS_FOCUS_MODE_FACEDETECT)
+					IS_ISP_SET_PARAM_AA_FACE(dev,
+							ISP_AF_FACE_ENABLE);
 				IS_ISP_SET_PARAM_AA_SCENE(dev,
 					ISP_AF_SCENE_NORMAL);
 				IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
@@ -2127,8 +2767,26 @@ static int fimc_is_v4l2_af_start_stop(struct fimc_is_dev *dev, int value)
 					"Focus change timeout:%s\n", __func__);
 					return -EBUSY;
 				}
+#endif
 				break;
 			case IS_FOCUS_MODE_MACRO:
+				dev->af.af_lock_state = 0;
+				dev->af.ae_lock_state = 0;
+				dev->af.awb_lock_state = 0;
+				dev->is_shared_region->af_status = 0;
+				fimc_is_mem_cache_clean((void *)IS_SHARED,
+				(unsigned long)(sizeof(struct is_share_region)));
+				IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
+				IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
+				IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
+				IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+				IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+				IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+				IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+
+				IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
+				IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
+				IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
 				IS_ISP_SET_PARAM_AA_SCENE(dev,
 					ISP_AF_SCENE_MACRO);
 				IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
@@ -2166,6 +2824,10 @@ static int fimc_is_v4l2_isp_iso(struct fimc_is_dev *dev, int value)
 		IS_ISP_SET_PARAM_ISO_CMD(dev, ISP_ISO_COMMAND_AUTO);
 		IS_ISP_SET_PARAM_ISO_VALUE(dev, 0);
 		break;
+	case ISO_50:
+		IS_ISP_SET_PARAM_ISO_CMD(dev, ISP_ISO_COMMAND_MANUAL);
+		IS_ISP_SET_PARAM_ISO_VALUE(dev, 50);
+		break;	
 	case ISO_100:
 		IS_ISP_SET_PARAM_ISO_CMD(dev, ISP_ISO_COMMAND_MANUAL);
 		IS_ISP_SET_PARAM_ISO_VALUE(dev, 100);
@@ -2182,6 +2844,12 @@ static int fimc_is_v4l2_isp_iso(struct fimc_is_dev *dev, int value)
 		IS_ISP_SET_PARAM_ISO_CMD(dev, ISP_ISO_COMMAND_MANUAL);
 		IS_ISP_SET_PARAM_ISO_VALUE(dev, 800);
 		break;
+#if 0		
+	case ISO_1200:
+		IS_ISP_SET_PARAM_ISO_CMD(dev, ISP_ISO_COMMAND_MANUAL);
+		IS_ISP_SET_PARAM_ISO_VALUE(dev, 1200);
+		break;	
+#endif		
 	case ISO_1600:
 		IS_ISP_SET_PARAM_ISO_CMD(dev, ISP_ISO_COMMAND_MANUAL);
 		IS_ISP_SET_PARAM_ISO_VALUE(dev, 1600);
@@ -2194,7 +2862,15 @@ static int fimc_is_v4l2_isp_iso(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 	}
 	return ret;
 }
@@ -2227,7 +2903,15 @@ static int fimc_is_v4l2_isp_effect(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return 0;
+		}
 	}
 	return ret;
 }
@@ -2274,33 +2958,245 @@ static int fimc_is_v4l2_isp_effect_legacy(struct fimc_is_dev *dev, int value)
 static int fimc_is_v4l2_isp_flash_mode(struct fimc_is_dev *dev, int value)
 {
 	int ret = 0;
+	//printk("----%s value=%d\n",__FUNCTION__,value);
 	switch (value) {
 	case FLASH_MODE_OFF:
-		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
-		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
+		if (dev->flash.mode != FLASH_MODE_OFF) {
+			IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_DISABLE);
+			IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+			IS_INC_PARAM_NUM(dev);
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
+				IS_PARAM_SIZE);
+			clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
+			fimc_is_hw_set_param(dev);
+			wait_event_timeout(dev->irq_queue1,
+					test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+						HZ/5);
+		}
+		dev->flash.mode = FLASH_MODE_OFF;
 		break;
 	case FLASH_MODE_AUTO:
-		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_AUTO);
-		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_ENABLE);
-		break;
-	case FLASH_MODE_ON:
+		dev->flash.mode = FLASH_MODE_AUTO;
+		dev->flash.led_on = 0;
 		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_MANUALON);
-		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
-		break;
-	case FLASH_MODE_TORCH:
-		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_TORCH);
-		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
-		break;
-	default:
-		return ret;
-	}
-	if (value > FLASH_MODE_BASE && value < FLASH_MODE_MAX) {
+		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, 1); // 1: pre-flash(atuo)
+		IS_ISP_SET_PARAM_FLASH_INTENSITY(dev, 102); 
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
 		fimc_is_hw_set_param(dev);
+
+		// check the IS_ST_FLASH_READY..
+		clear_bit(IS_ST_FLASH_READY, &dev->state);
+		ret = wait_event_timeout(dev->irq_queue1,
+					test_bit(IS_ST_FLASH_READY, &dev->state),
+					1*HZ);
+		
+		if (!ret) {
+			err("wait IS_ST_FLASH_READY timeout. \n");
+			return -EINVAL;
+		}
+
+		if (dev->flash.led_on == ISP_CAMERA_FLASH_SUCCESS) {
+			IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_TORCH);
+			IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+			IS_INC_PARAM_NUM(dev);
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
+				IS_PARAM_SIZE);
+			fimc_is_hw_set_param(dev);
+			
+        		//wait 8frames...
+        		fimc_is_frame_delay(dev, 8);
+        
+			/*
+				Step 2. single AF, wait AA_DONE.
+			*/
+			IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
+			IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
+			IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
+			IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+			IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+			IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+			IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+          		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
+          		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
+			IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
+			IS_INC_PARAM_NUM(dev);
+			dev->af.af_state = FIMC_IS_AF_SETCONFIG;
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
+									IS_PARAM_SIZE);
+			fimc_is_hw_set_param(dev);
+			
+			dev->af.af_lock_state = 0;
+			ret = wait_event_timeout(dev->irq_queue1,
+            			(dev->af.af_lock_state != 0), 3*HZ/2);
+			if (!ret) {
+       			err("wait AA_DONE timeout. \n");
+				//return -EINVAL;
+			}
+
+        		//wait 2 frame...
+			fimc_is_frame_delay(dev, 2);		
+
+			IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_AUTO);
+			IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
+			IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+			IS_INC_PARAM_NUM(dev);
+			fimc_is_mem_cache_clean((void *)dev->is_p_region,
+								IS_PARAM_SIZE);
+			fimc_is_hw_set_param(dev);
+		}
+		break;
+		
+	case FLASH_MODE_ON:
+		dev->flash.mode = FLASH_MODE_ON;
+		dev->flash.led_on = ISP_CAMERA_FLASH_SUCCESS;
+		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_MANUALON);
+		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, 0); // 0:pre-flash(forse auto)
+		IS_ISP_SET_PARAM_FLASH_INTENSITY(dev, 102); 
+		IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+		IS_INC_PARAM_NUM(dev);
+		fimc_is_mem_cache_clean((void *)dev->is_p_region,
+			IS_PARAM_SIZE);
+		fimc_is_hw_set_param(dev);
+
+		// check the IS_ST_FLASH_READY..
+		clear_bit(IS_ST_FLASH_READY, &dev->state);
+		ret = wait_event_timeout(dev->irq_queue1,
+					test_bit(IS_ST_FLASH_READY, &dev->state),
+					1*HZ);
+		if (!ret) {
+			err("wait IS_ST_FLASH_READY timeout. \n");
+			return -EINVAL;
+		}
+	 
+		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_TORCH);
+		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
+		IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+		IS_INC_PARAM_NUM(dev);
+		fimc_is_mem_cache_clean((void *)dev->is_p_region,
+			IS_PARAM_SIZE);
+		fimc_is_hw_set_param(dev);
+
+		 //wait 8frames...
+		fimc_is_frame_delay(dev, 8);
+
+		/*
+			Step 2. single AF, wait AA_DONE.
+		*/
+		IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
+		IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AF);
+		IS_ISP_SET_PARAM_AA_MODE(dev, ISP_AF_MODE_SINGLE);
+		IS_ISP_SET_PARAM_AA_TOUCH(dev,ISP_AF_TOUCH_DISABLE);
+		IS_ISP_SET_PARAM_AA_SLEEP(dev, ISP_AF_SLEEP_OFF);
+		IS_ISP_SET_PARAM_AA_FACE(dev, ISP_AF_FACE_DISABLE);
+		IS_ISP_SET_PARAM_AA_RESPONSE(dev,ISP_AF_RESPONSE_PREVIEW);
+      		IS_ISP_SET_PARAM_AA_TOUCH_X(dev, 0);
+      		IS_ISP_SET_PARAM_AA_TOUCH_Y(dev, 0);
+		IS_ISP_SET_PARAM_AA_MANUAL_AF(dev, 0);
+		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
+		IS_INC_PARAM_NUM(dev);
+		dev->af.af_state = FIMC_IS_AF_SETCONFIG;
+		fimc_is_mem_cache_clean((void *)dev->is_p_region,
+								IS_PARAM_SIZE);
+		fimc_is_hw_set_param(dev);
+
+		dev->af.af_lock_state = 0;
+		ret = wait_event_timeout(dev->irq_queue1,
+    			(dev->af.af_lock_state != 0), 3*HZ/2);
+		if (!ret) {
+   			err("wait AA_DONE timeout. \n");
+			//return -EINVAL;
+		}
+
+    		//wait 2 frame...
+		fimc_is_frame_delay(dev, 2);		
+
+		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_FLASH_ON);
+		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_ENABLE);
+		IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+		IS_INC_PARAM_NUM(dev);
+		fimc_is_mem_cache_clean((void *)dev->is_p_region,
+								IS_PARAM_SIZE);
+		fimc_is_hw_set_param(dev);
+
+		break;
+		
+	case FLASH_MODE_TORCH:
+		dev->flash.mode = FLASH_MODE_TORCH;
+		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_MANUALON);
+		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, 2); // preflash torch
+		/*
+                   FlashIntensity value range is 0~0x3f
+                   bit7  bit6 | bit5  bit4  bit3  | bit2  bit1  bit0
+                                 |  LED2 current  | LED1 current 
+                                 |  000 = 28.125mA
+                                 |  001 = 56.25mA
+                                 |  010 = 84.375mA
+                                 |  011 = 112.5mA
+                                 |  100 = 140.625mA
+                                 |  101 = 168.75mA
+                                 |  110 = 196.875mA
+                                 |  111 = 225mA
+		*/
+		IS_ISP_SET_PARAM_FLASH_INTENSITY(dev, dev->flash.intensity); //flash on
+		IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+		IS_INC_PARAM_NUM(dev);
+		fimc_is_mem_cache_clean((void *)dev->is_p_region,
+			IS_PARAM_SIZE);
+		fimc_is_hw_set_param(dev);
+
+		// check the IS_ST_FLASH_READY..
+		clear_bit(IS_ST_FLASH_READY, &dev->state);
+		ret = wait_event_timeout(dev->irq_queue1,
+					test_bit(IS_ST_FLASH_READY, &dev->state),
+					1*HZ);
+		if (!ret) {
+			err("wait IS_ST_FLASH_READY timeout. \n");
+			return -EINVAL;
+		}
+
+		
+		IS_ISP_SET_PARAM_FLASH_CMD(dev, ISP_FLASH_COMMAND_TORCH);
+		IS_ISP_SET_PARAM_FLASH_REDEYE(dev, ISP_FLASH_REDEYE_DISABLE);
+		IS_SET_PARAM_BIT(dev, PARAM_ISP_FLASH);
+		IS_INC_PARAM_NUM(dev);
+		fimc_is_mem_cache_clean((void *)dev->is_p_region,
+			IS_PARAM_SIZE);
+		fimc_is_hw_set_param(dev);
+		break;
+	default:
+		return ret;
 	}
+	
+	return ret;
+}
+
+//limeng 120727:flash intensity depends on torch mode
+static int fimc_is_v4l2_isp_torch_mode(struct fimc_is_dev *dev, int value)
+{
+	int ret = 0;
+
+	switch (value) {
+	case TORCH_MODE_PICTURE:
+		dev->flash.intensity = 0x1b; //0x3f;
+		break;
+
+	case TORCH_MODE_RECORD:
+		dev->flash.intensity = 0x1b;//0x3f;
+		break;
+
+	case TORCH_MODE_FLASHLIGHT:
+		dev->flash.intensity = 0x1b;
+		break;
+	default:
+		return ret;	
+	}
+
 	return ret;
 }
 
@@ -2338,7 +3234,15 @@ static int fimc_is_v4l2_awb_mode(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return 0;
+		}
 	}
 	return ret;
 }
@@ -2432,11 +3336,22 @@ static int fimc_is_v4l2_isp_contrast(struct fimc_is_dev *dev, int value)
 		return ret;
 	}
 	if (value >= 0 && value < IS_CONTRAST_MAX) {
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
+
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 	}
 	return ret;
 }
@@ -2474,6 +3389,9 @@ static int fimc_is_v4l2_isp_contrast_legacy(struct fimc_is_dev *dev, int value)
 		return ret;
 	}
 	if (value >= 0 && value < CONTRAST_MAX) {
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
+
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
@@ -2516,11 +3434,22 @@ static int fimc_is_v4l2_isp_saturation(struct fimc_is_dev *dev, int value)
 		return ret;
 	}
 	if (value >= 0 && value < SATURATION_MAX) {
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
+
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 	}
 	return ret;
 }
@@ -2559,11 +3488,22 @@ static int fimc_is_v4l2_isp_sharpness(struct fimc_is_dev *dev, int value)
 		return ret;
 	}
 	if (value >= 0 && value < SHARPNESS_MAX) {
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
+
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 	}
 	return ret;
 }
@@ -2621,11 +3561,22 @@ static int fimc_is_v4l2_isp_exposure(struct fimc_is_dev *dev, int value)
 		return ret;
 	}
 	if (value >= 0 && value < IS_EXPOSURE_MAX) {
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
+
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 	}
 	return ret;
 }
@@ -2637,6 +3588,8 @@ static int fimc_is_v4l2_isp_exposure_legacy(struct fimc_is_dev *dev, int value)
 		IS_ISP_SET_PARAM_ADJUST_CMD(dev,
 					ISP_ADJUST_COMMAND_MANUAL_EXPOSURE);
 		IS_ISP_SET_PARAM_ADJUST_EXPOSURE(dev, value);
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
@@ -2679,11 +3632,22 @@ static int fimc_is_v4l2_isp_brightness(struct fimc_is_dev *dev, int value)
 		return ret;
 	}
 	if (value >= 0 && value < IS_BRIGHTNESS_MAX) {
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
+
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 	}
 	return ret;
 }
@@ -2721,11 +3685,22 @@ static int fimc_is_v4l2_isp_hue(struct fimc_is_dev *dev, int value)
 		return ret;
 	}
 	if (value >= IS_HUE_MINUS_2 && value < IS_HUE_MAX) {
+		IS_ISP_SET_PARAM_ADJUST_HOTPIXEL(dev, 1) ;
+		IS_ISP_SET_PARAM_ADJUST_SHADINGCRC(dev, 1) ;
+
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_ADJUST);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 	}
 	return ret;
 }
@@ -2755,7 +3730,15 @@ static int fimc_is_v4l2_isp_metering(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 	}
 	return ret;
 }
@@ -2814,7 +3797,15 @@ static int fimc_is_v4l2_isp_afc(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 	}
 	return ret;
 }
@@ -2842,7 +3833,7 @@ static int fimc_is_v4l2_isp_afc_legacy(struct fimc_is_dev *dev, int value)
 	default:
 		return ret;
 	}
-	if (value >= ANTI_BANDING_OFF && value <= ANTI_BANDING_60HZ) {
+	if (value >= ANTI_BANDING_AUTO && value <= ANTI_BANDING_OFF) {
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AFC);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
@@ -3504,6 +4495,7 @@ static int fimc_is_v4l2_ae_awb_lockunlock(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 							IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
 		break;
 	case AE_LOCK_AWB_UNLOCK:
@@ -3513,13 +4505,19 @@ static int fimc_is_v4l2_ae_awb_lockunlock(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		wait_event_timeout(dev->irq_queue1,
+		test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+			1*HZ);
+
 		IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_START);
 		IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AWB);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
 		break;
 	case AE_UNLOCK_AWB_LOCK:
@@ -3529,13 +4527,19 @@ static int fimc_is_v4l2_ae_awb_lockunlock(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		wait_event_timeout(dev->irq_queue1,
+		test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+			1*HZ);
+
 		IS_ISP_SET_PARAM_AA_CMD(dev, ISP_AA_COMMAND_STOP);
 		IS_ISP_SET_PARAM_AA_TARGET(dev, ISP_AA_TARGET_AWB);
 		IS_SET_PARAM_BIT(dev, PARAM_ISP_AA);
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
 		break;
 	case AE_LOCK_AWB_LOCK:
@@ -3546,11 +4550,16 @@ static int fimc_is_v4l2_ae_awb_lockunlock(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
 		break;
 	default:
 		break;
 	}
+	wait_event_timeout(dev->irq_queue1,
+		test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+			1*HZ);
+
 	return ret;
 }
 
@@ -3641,7 +4650,15 @@ static int fimc_is_v4l2_cmd_drc(struct fimc_is_dev *dev, int value)
 		IS_INC_PARAM_NUM(dev);
 		fimc_is_mem_cache_clean((void *)dev->is_p_region,
 			IS_PARAM_SIZE);
+		clear_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state);
 		fimc_is_hw_set_param(dev);
+		ret = wait_event_timeout(dev->irq_queue1,
+			test_bit(IS_ST_BLOCK_CMD_CLEARED, &dev->state),
+					FIMC_IS_SHUTDOWN_TIMEOUT_SENSOR);
+		if (!ret) {
+			err("wait timeout : %s\n", __func__);
+			return -EINVAL;
+		}
 	}
 	return ret;
 }
@@ -3694,7 +4711,7 @@ static int fimc_is_v4l2_mode_change(struct fimc_is_dev *dev, int value)
 						FIMC_IS_SHUTDOWN_TIMEOUT);
 	if (!ret) {
 		err("Mode change timeout !!\n");
-		fimc_is_hw_set_low_poweroff(dev, true);
+		//fimc_is_hw_set_low_poweroff(dev, true);
 		return -EINVAL;
 	}
 	printk(KERN_INFO "CAC margin - %d, %d\n", dev->sensor.offset_x,
@@ -3769,6 +4786,13 @@ static int fimc_is_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	case V4L2_CID_CAMERA_OBJECT_POSITION_Y:
 		dev->af.pos_y = ctrl->value;
 		break;
+	//##mmkim 0612 -- add touch inner window.	
+	case V4L2_CID_IS_CAMERA_OBJECT_WINDOW_X:
+		dev->af.width = ctrl->value;
+		break;
+	case V4L2_CID_IS_CAMERA_OBJECT_WINDOW_Y:
+		dev->af.height = ctrl->value;
+		break;
 	case V4L2_CID_CAMERA_FOCUS_MODE:
 		ret = fimc_is_v4l2_af_mode(dev, ctrl->value);
 		break;
@@ -3802,6 +4826,10 @@ static int fimc_is_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	/* FLASH */
 	case V4L2_CID_CAMERA_FLASH_MODE:
 		ret = fimc_is_v4l2_isp_flash_mode(dev, ctrl->value);
+		break;
+	/* TORCH */
+	case V4L2_CID_CAMERA_TORCH_MODE:
+		ret = fimc_is_v4l2_isp_torch_mode(dev, ctrl->value);
 		break;
 	case V4L2_CID_IS_CAMERA_AWB_MODE:
 		ret = fimc_is_v4l2_awb_mode(dev, ctrl->value);
@@ -3927,6 +4955,9 @@ static int fimc_is_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 		}
 		dev->frame_count++;
 		fimc_is_mem_cache_clean((void *)IS_HEADER, IS_PARAM_SIZE);
+
+		//wake up irq_queue, for frame_num wait. Jiangshanbin 2012/06/26
+		wake_up(&dev->irq_queue1);
 		break;
 	case V4L2_CID_IS_SET_FRAME_BADMARK:
 		break;
@@ -3968,6 +4999,11 @@ static int fimc_is_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 		break;
 	case V4L2_CID_CAMERA_VGA_BLUR:
 		break;
+	//case V4L2_CID_IS_AF_LOST_STATE:
+		//printk("\n++++(%s)V4L2_CID_IS_AF_LOST_STATE:%d",__func__,ctrl->value);
+		//ret = fimc_is_af_lost(dev, ctrl->value);
+		//printk("\n++++(%s)V4L2_CID_IS_AF_LOST_STATE:%d",__func__,ctrl->value);
+		//break;
 	default:
 		dbg("Invalid control\n");
 		return -EINVAL;
@@ -3981,6 +5017,7 @@ static int fimc_is_g_ext_ctrls_handler(struct fimc_is_dev *dev,
 {
 	int ret = 0;
 	u32 tmp = 0;
+	u32 idx = (dev->fd_header.index + dev->fd_header.offset) % MAX_FACE_COUNT;
 	switch (ctrl->id) {
 	/* Face Detection CID handler */
 	/* 1. Overall information */
@@ -3990,149 +5027,119 @@ static int fimc_is_g_ext_ctrls_handler(struct fimc_is_dev *dev,
 	case V4L2_CID_IS_FD_GET_FACE_FRAME_NUMBER:
 		if (dev->fd_header.offset < dev->fd_header.count) {
 			ctrl->value =
-				dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].frame_number;
+				dev->is_p_region->face[idx].frame_number;
 		} else {
 			ctrl->value = 0;
 			return -255;
 		}
 		break;
 	case V4L2_CID_IS_FD_GET_FACE_CONFIDENCE:
-		ctrl->value = dev->is_p_region->face[dev->fd_header.index
-					+ dev->fd_header.offset].confidence;
+		ctrl->value = dev->is_p_region->face[idx].confidence;
 		break;
 	case V4L2_CID_IS_FD_GET_FACE_SMILE_LEVEL:
-		ctrl->value = dev->is_p_region->face[dev->fd_header.index
-					+ dev->fd_header.offset].smile_level;
+		ctrl->value = dev->is_p_region->face[idx].smile_level;
 		break;
 	case V4L2_CID_IS_FD_GET_FACE_BLINK_LEVEL:
-		ctrl->value = dev->is_p_region->face[dev->fd_header.index
-					+ dev->fd_header.offset].blink_level;
+		ctrl->value = dev->is_p_region->face[idx].blink_level;
 		break;
 	/* 2. Face information */
 	case V4L2_CID_IS_FD_GET_FACE_TOPLEFT_X:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-					+ dev->fd_header.offset].face.offset_x;
+		tmp = dev->is_p_region->face[idx].face.offset_x;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.width;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_FACE_TOPLEFT_Y:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-					+ dev->fd_header.offset].face.offset_y;
+		tmp = dev->is_p_region->face[idx].face.offset_y;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.height;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_FACE_BOTTOMRIGHT_X:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-					+ dev->fd_header.offset].face.offset_x
-			+ dev->is_p_region->face[dev->fd_header.index
-					+ dev->fd_header.offset].face.width;
+		tmp = dev->is_p_region->face[idx].face.offset_x
+			+ dev->is_p_region->face[idx].face.width;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.width;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_FACE_BOTTOMRIGHT_Y:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-					+ dev->fd_header.offset].face.offset_y
-			+ dev->is_p_region->face[dev->fd_header.index
-					+ dev->fd_header.offset].face.height;
+		tmp = dev->is_p_region->face[idx].face.offset_y
+			+ dev->is_p_region->face[idx].face.height;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.height;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	/* 3. Left eye information */
 	case V4L2_CID_IS_FD_GET_LEFT_EYE_TOPLEFT_X:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].left_eye.offset_x;
+		tmp = dev->is_p_region->face[idx].left_eye.offset_x;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.width;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_LEFT_EYE_TOPLEFT_Y:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].left_eye.offset_y;
+		tmp = dev->is_p_region->face[idx].left_eye.offset_y;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.height;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_LEFT_EYE_BOTTOMRIGHT_X:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].left_eye.offset_x
-			+ dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].left_eye.width;
+		tmp = dev->is_p_region->face[idx].left_eye.offset_x
+			+ dev->is_p_region->face[idx].left_eye.width;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.width;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_LEFT_EYE_BOTTOMRIGHT_Y:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].left_eye.offset_y
-			+ dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].left_eye.height;
+		tmp = dev->is_p_region->face[idx].left_eye.offset_y
+			+ dev->is_p_region->face[idx].left_eye.height;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.height;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	/* 4. Right eye information */
 	case V4L2_CID_IS_FD_GET_RIGHT_EYE_TOPLEFT_X:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].right_eye.offset_x;
+		tmp = dev->is_p_region->face[idx].right_eye.offset_x;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.width;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_RIGHT_EYE_TOPLEFT_Y:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].right_eye.offset_y;
+		tmp = dev->is_p_region->face[idx].right_eye.offset_y;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.height;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_RIGHT_EYE_BOTTOMRIGHT_X:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].right_eye.offset_x
-			+ dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].right_eye.width;
+		tmp = dev->is_p_region->face[idx].right_eye.offset_x
+			+ dev->is_p_region->face[idx].right_eye.width;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.width;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_RIGHT_EYE_BOTTOMRIGHT_Y:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].right_eye.offset_y
-			+ dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].right_eye.height;
+		tmp = dev->is_p_region->face[idx].right_eye.offset_y
+			+ dev->is_p_region->face[idx].right_eye.height;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.height;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	/* 5. Mouth eye information */
 	case V4L2_CID_IS_FD_GET_MOUTH_TOPLEFT_X:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].mouth.offset_x;
+		tmp = dev->is_p_region->face[idx].mouth.offset_x;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.width;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_MOUTH_TOPLEFT_Y:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].mouth.offset_y;
+		tmp = dev->is_p_region->face[idx].mouth.offset_y;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.height;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_MOUTH_BOTTOMRIGHT_X:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].mouth.offset_x
-			+ dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].mouth.width;
+		tmp = dev->is_p_region->face[idx].mouth.offset_x
+			+ dev->is_p_region->face[idx].mouth.width;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.width;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	case V4L2_CID_IS_FD_GET_MOUTH_BOTTOMRIGHT_Y:
-		tmp = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].mouth.offset_y
-			+ dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].mouth.height;
+		tmp = dev->is_p_region->face[idx].mouth.offset_y
+			+ dev->is_p_region->face[idx].mouth.height;
 		tmp = (tmp * 2 * GED_FD_RANGE) /  dev->fd_header.height;
 		ctrl->value = (s32)tmp - GED_FD_RANGE;
 		break;
 	/* 6. Angle information */
 	case V4L2_CID_IS_FD_GET_ANGLE:
-		ctrl->value = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].roll_angle;
+		ctrl->value = dev->is_p_region->face[idx].roll_angle;
 		break;
 	case V4L2_CID_IS_FD_GET_YAW_ANGLE:
-		ctrl->value = dev->is_p_region->face[dev->fd_header.index
-				+ dev->fd_header.offset].yaw_angle;
+		ctrl->value = dev->is_p_region->face[idx].yaw_angle;
 		break;
 	/* 7. Update next face information */
 	case V4L2_CID_IS_FD_GET_NEXT:
@@ -4195,6 +5202,7 @@ static int fimc_is_g_ext_ctrls(struct v4l2_subdev *sd,
 			break;
 		}
 	}
+	//printk("READ_FD \n");
 
 	dev->fd_header.index = 0;
 	dev->fd_header.count = 0;
@@ -4409,7 +5417,7 @@ static int fimc_is_s_mbus_fmt(struct v4l2_subdev *sd,
 	if (!ret) {
 		err("wait timeout : Set format - %d, %d\n",
 						mf->width, mf->height);
-		fimc_is_hw_set_low_poweroff(dev, true);
+		//fimc_is_hw_set_low_poweroff(dev, true);
 		return -EINVAL;
 	}
 	dev->sensor.framerate_update = false;
@@ -4434,7 +5442,7 @@ static int fimc_is_s_stream(struct v4l2_subdev *sd, int enable)
 				FIMC_IS_SHUTDOWN_TIMEOUT);
 		if (!ret) {
 			err("wait timeout : Stream on\n");
-			fimc_is_hw_set_low_poweroff(dev, true);
+			//fimc_is_hw_set_low_poweroff(dev, true);
 			return -EINVAL;
 		}
 	} else {
@@ -4450,8 +5458,8 @@ static int fimc_is_s_stream(struct v4l2_subdev *sd, int enable)
 						FIMC_IS_SHUTDOWN_TIMEOUT);
 		if (!ret) {
 			err("wait timeout : Stream off\n");
-			printk(KERN_ERR "Low power off\n");
-			fimc_is_hw_set_low_poweroff(dev, true);
+			//printk(KERN_ERR "Low power off\n");
+			//fimc_is_hw_set_low_poweroff(dev, true);
 			return -EINVAL;
 		}
 		dev->setfile.sub_index = 0;
@@ -4661,3 +5669,97 @@ const struct v4l2_subdev_ops fimc_is_subdev_ops = {
 	.core	= &fimc_is_core_ops,
 	.video	= &fimc_is_video_ops,
 };
+
+
+//limeng 0514:for fimc-is af lost interrupt
+static int fimc_is_open(struct file *filp)
+{
+	printk("\n+++++++++++%s +++++",__func__);
+	return 0;
+}
+
+static int fimc_is_release(struct file *filp)
+{
+	printk("\n+++++++++++%s +++++",__func__);
+	return 0;
+}
+
+#if 1
+extern struct v4l2_subdev  *fimc_is_sd;
+static u32 fimc_is_af_lost_poll(struct file *filp, poll_table *wait)
+{	
+	struct fimc_is_dev *dev = to_fimc_is_dev(fimc_is_sd);
+	u32 mask = 0;
+
+	//printk("\n+++++++++++%s +++++",__func__);
+
+	if (  dev->af.af_lost_state  !=  FIMC_IS_AF_UNKNOWN) {
+		mask = POLLIN | POLLRDNORM;
+	} else {
+		poll_wait(filp, &dev->aflost_queue, wait);
+	}
+	
+	return mask;
+}
+#else
+int fimc_is_af_lost(struct fimc_is_dev *dev, int value)
+{
+	int ret = 0;
+
+	switch (value){
+	case 2:
+		ret = wait_event_timeout(dev->irq_queue1,
+			(dev->af.af_lost_state == FIMC_IS_AF_SEARCH), FIMC_IS_SHUTDOWN_TIMEOUT_AF);
+
+		if (!ret) 
+			err("wait timeout - search focus\n");
+		else
+			printk("FIMC_IS_AF_SEARCH occur\n");
+		
+		break;
+	case 3:
+		ret = wait_event_timeout(dev->irq_queue1,
+			(dev->af.af_lost_state == FIMC_IS_AF_INFOCUS), FIMC_IS_SHUTDOWN_TIMEOUT_AF);
+
+		if (!ret) 
+			err("wait timeout - in focus\n");
+		else
+			printk("FIMC_IS_AF_INFOCUS occur");
+
+		break;
+	case 4:
+		ret = wait_event_timeout(dev->irq_queue1,
+			(dev->af.af_lost_state == FIMC_IS_AF_OUTOFFOCUS), FIMC_IS_SHUTDOWN_TIMEOUT_AF);
+
+		if (!ret) 
+			err("wait timeout - outof focus\n");
+		else
+			printk("FIMC_IS_AF_OUTOFFOCUS occur\n");
+
+		break;
+	default:
+		return ret;	
+	}
+	return ret;
+}
+#endif
+
+
+static struct file_operations fimc_is_fops = {
+	.open = fimc_is_open,
+	.release = fimc_is_release,
+	.poll = fimc_is_af_lost_poll,
+};
+
+static struct miscdevice fimc_is_misc = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "fimc_is",
+	.fops = &fimc_is_fops,
+};
+
+void register_fimc_is_dev(void)
+{
+	misc_register(&fimc_is_misc);
+}
+
+
