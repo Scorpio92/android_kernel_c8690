@@ -604,7 +604,6 @@ static int m5mo_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 		CHECK_ERR(err);
 
 		ctrl->value = caf_status;
-
 		break;
 //Cellon add begin , charles.hu 2012/12/12		
 		
@@ -1741,15 +1740,15 @@ static int m5mo_set_auto_focus_start_stop(struct v4l2_subdev *sd, int val)
 			 CHECK_ERR(err);		 
 
 			 /* check AF status for 2 sec */
-			 for (i = 200; i && err; i--) {
-			    msleep(10);
-			    err = m5mo_readb(sd, M5MO_CATEGORY_LENS,M5MO_LENS_AF_STATUS, &status);
-			    CHECK_ERR(err);
-			    //printk("%s : Af status === %d\n",__func__,status);
-			    //if (!(status & 0x01))
-			    if( status == 0x1 || status == 0x2 )
-					err = 0;
-		     }	
+			 //for (i = 20; i && err; i--) {
+			 //     msleep(5);
+			 err = m5mo_readb(sd, M5MO_CATEGORY_LENS,M5MO_LENS_AF_STATUS, &status);
+			 CHECK_ERR(err);
+			 //   printk("%s : Af status === %d\n",__func__,status);
+			 //   if (!(status & 0x01))
+			 //    if( status == 0x1 || status == 0x2 )
+			 //		err = 0;
+		     //}	
 			 state->focus.status = status;			 
 	 
 			 break;
@@ -1913,13 +1912,13 @@ static int m5mo_set_jpeg_quality(struct v4l2_subdev *sd,
 	if (val <= 65)			/* Normal */
 //Cellon modify by charles.hu , begin 		
 		//ratio = 0x61;
-		ratio = 0x63;
+		ratio = 0x52;
 	else if (val <= 75)		/* Fine */
 		//ratio = 0x5A;
 		ratio = 0x5C;
 	else					/* Superfine */
 		//ratio = 0x52;
-	    ratio = 0x48;
+	    ratio = 0x61;
 //Cellon modify by charles.hu , end  	
 
 	err = m5mo_writeb(sd, M5MO_CATEGORY_CAPPARM,
@@ -2001,14 +2000,14 @@ static int m5mo_start_capture(struct v4l2_subdev *sd, int val)
 	// begin add by shaking.wan set image rotation.2013-02-18.
 	switch (val) {
 	    case 90:
-		 err = m5mo_writeb(sd, M5MO_CATEGORY_CAPPARM,0x04, 0x02);	//Rotation  90
-		 CHECK_ERR(err);
+		 //err = m5mo_writeb(sd, M5MO_CATEGORY_CAPPARM,0x04, 0x02);	//Rotation  90
+		 //CHECK_ERR(err);
 	        break;
 	    case 180:		 
 	        break;
 	    case 270:
-		 err = m5mo_writeb(sd, M5MO_CATEGORY_CAPPARM,0x04, 0x01);	//Rotation  90
-		 CHECK_ERR(err);
+		 //err = m5mo_writeb(sd, M5MO_CATEGORY_CAPPARM,0x04, 0x01);	//Rotation  90
+		 //CHECK_ERR(err);
 	        break;
 	    case 0:
 		 err = m5mo_writeb(sd, M5MO_CATEGORY_CAPPARM,0x03, 0x01);	//Reverse 180
@@ -2019,7 +2018,7 @@ static int m5mo_start_capture(struct v4l2_subdev *sd, int val)
 		 break;
 	    default:
 	        break;
-	    }
+		}
 	// end add by shaking.wan set image rotation.2013-02-18.
 	
 	if(!Continous_flag)
@@ -2207,8 +2206,8 @@ static int m5mo_set_face_detection(struct v4l2_subdev *sd,int val)
 		CHECK_ERR(err);	
 
 		//Sop  AF	
-		err = m5mo_writeb(sd, M5MO_CATEGORY_LENS,M5MO_LENS_AF_START, 0x00);
-		CHECK_ERR(err);
+		//	err = m5mo_writeb(sd, M5MO_CATEGORY_LENS,M5MO_LENS_AF_START, 0x00);
+		//	CHECK_ERR(err);
 //Cellon add begin , charles.hu 2012/12/21
 
 	}
