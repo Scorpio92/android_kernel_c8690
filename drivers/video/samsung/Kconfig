@@ -26,6 +26,10 @@ config FB_S5P_DEBUG
 	bool "S5P Framebuffer debug messages"
 	depends on FB_S5P
 
+config FB_S5P_VSYNC_THREAD
+	bool "S5P Framebuffer vsync thread"
+	depends on FB_S5P
+
 config FB_S5P_TRACE_UNDERRUN
 	bool "S5P Framebuffer FIFO underrun trace"
 	depends on FB_S5P
@@ -77,12 +81,37 @@ config VIDEO_SAMSUNG_MEMSIZE_FIMD_VIDEO
 	depends on FB_S5P && EXYNOS4_CONTENT_PATH_PROTECTION
 	default "16384"
 
+config FB_S5P_MDNIE
+	bool "Samsung MDNIE"
+	depends on FB_S5P
+	default "0"
+	---help---
+	This enables support for Samsung MDNIE feature
+
+config FB_MDNIE_PWM
+	bool "Samsung MDNIE PWM"
+	depends on FB_S5P
+	depends on FB_S5P_MDNIE
+	default "0"
+	---help---
+	This enables support for Samsung MDNIE feature
+
 config FB_S5P_MIPI_DSIM
 	bool "Samsung MIPI DSIM"
 	depends on FB_S5P
 	default n
 	---help---
 	  This enables support for Samsung MIPI DSIM feature
+
+choice
+depends on FB_S5P
+prompt "Select RGB Order"
+default FB_BGRA_ORDER
+config FB_BGRA_ORDER
+	bool "BGRA8888"
+	help
+	  This enables use BGRA order.
+endchoice
 
 choice
 depends on FB_S5P

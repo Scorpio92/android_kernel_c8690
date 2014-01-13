@@ -136,6 +136,7 @@
 #define S3C_BLENDEQ3		(0x024C)	/* Window 3 blending equation control */
 #define S3C_BLENDEQ4		(0x0250)	/* Window 4 blending equation control */
 #define S3C_BLENDCON		(0x0260)	/* Blending control */
+#define S3C_SHD_WIN_BASE	(0x4000)	/* Shadow Window control reg Base */
 
 /*
  * Bit Definitions
