@@ -225,8 +225,6 @@ struct dsim_lcd_config {
 
 	/* platform data for lcd panel based on MIPI-DSI. */
 	void *mipi_ddi_pd;
-
-	unsigned int lcd_enabled;
 };
 
 struct s5p_platform_dsim {

@@ -10,14 +10,6 @@ config VIDEO_EXYNOS
 	  This is a representative exynos multimedia device.
 
 if VIDEO_EXYNOS
-
-config VIDEO_EXYNOS_MEMSIZE_FIMC_IS
-	int "Memory size in Kbytes for FIMC-IS"
-	depends on VIDEO_EXYNOS
-	default "10240"
-	help
-	  This is to assign memory used in FIMC-IS.
-
 	source "drivers/media/video/exynos/mdev/Kconfig"
 	source "drivers/media/video/exynos/fimc-lite/Kconfig"
 	source "drivers/media/video/exynos/mipi-csis/Kconfig"
@@ -25,8 +17,8 @@ config VIDEO_EXYNOS_MEMSIZE_FIMC_IS
 	source "drivers/media/video/exynos/rotator/Kconfig"
 if ARCH_EXYNOS4
 	source "drivers/media/video/exynos/fimc-is/Kconfig"
+	source "drivers/media/video/exynos/fimc-is_external_isp/Kconfig"
 endif
-
 if ARCH_EXYNOS5
 	source "drivers/media/video/exynos/gsc/Kconfig"
 	source "drivers/media/video/exynos/fimc-is-mc/Kconfig"

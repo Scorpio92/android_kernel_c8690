@@ -307,6 +307,7 @@ static int __devinit s5p_cec_probe(struct platform_device *pdev)
 	if (pdata->cfg_gpio)
 		pdata->cfg_gpio(pdev);
 
+
 	/* get ioremap addr */
 	ret = s5p_cec_mem_probe(pdev);
 	if (ret != 0) {

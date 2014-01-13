@@ -28,11 +28,8 @@
 #define ALIGN_64KB	(1 << 16)
 #define ALIGN_128KB	(1 << 17)
 
-#define ALIGN_W		128	/* Tile, Horizontal, Luma & Chroma	*/
-#define ALIGN_H		32	/* Tile, Vertical, Luma & Chroma	*/
-#define ALIGN_W_L	16	/* Linear, Horizontal, Luma & Chroma	*/
-#define ALIGN_H_L_L	16	/* Linear, Vertical, Luma		*/
-#define ALIGN_H_L_C	8	/* Linear, Vertical, Chroma		*/
+#define ALIGN_W		128
+#define ALIGN_H		32
 
 /* System */					/* Size, Port, Align */
 #define MFC_FW_SYSTEM_SIZE	(0x80000)	/* 512KB, A, N(4KB for VMEM) */
@@ -142,10 +139,6 @@ struct mfc_alloc_buffer {
 	unsigned char *addr;	/* kernel virtual address space */
 	unsigned int type;	/* buffer type			*/
 	int owner;		/* instance context id		*/
-#if defined(CONFIG_DMA_CMA) && defined(CONFIG_USE_MFC_CMA)
-	struct device *dev;
-	dma_addr_t dma_addr;
-#endif
 #if defined(CONFIG_VIDEO_MFC_VCM_UMP)
 	struct vcm_mmu_res *vcm_s;
 	struct vcm_res *vcm_k;
@@ -163,9 +156,6 @@ struct mfc_alloc_buffer {
 				 * when user use mmap,
 				 * user can access whole of memory by offset.
 				 */
-#ifdef CONFIG_SLP_DMABUF
-	int	dmabuf_fd;
-#endif
 #endif
 };
 
@@ -182,7 +172,7 @@ void mfc_final_buf(void);
 void mfc_set_buf_alloc_scheme(enum MFC_BUF_ALLOC_SCHEME scheme);
 void mfc_merge_buf(void);
 struct mfc_alloc_buffer *_mfc_alloc_buf(
-	struct mfc_inst_ctx *ctx, unsigned int size, int align, int flag);
+	struct mfc_inst_ctx *ctx, int size, int align, int flag);
 int mfc_alloc_buf(
 	struct mfc_inst_ctx *ctx, struct mfc_buf_alloc_arg* args, int flag);
 int _mfc_free_buf(unsigned long real);
@@ -194,9 +184,6 @@ unsigned long mfc_get_buf_real(int owner, unsigned int key);
 unsigned char *mfc_get_buf_addr(int owner, unsigned char *user);
 unsigned char *_mfc_get_buf_addr(int owner, unsigned char *user);
 */
-#ifdef CONFIG_SLP_DMABUF
-int mfc_get_buf_dmabuf(unsigned long real);
-#endif
 #ifdef CONFIG_VIDEO_MFC_VCM_UMP
 unsigned int mfc_vcm_bind_from_others(struct mfc_inst_ctx *ctx,
 				struct mfc_buf_alloc_arg *args, int flag);

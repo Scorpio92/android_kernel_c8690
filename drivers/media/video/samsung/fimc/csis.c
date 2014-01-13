@@ -32,8 +32,6 @@ static s32 err_print_cnt;
 
 static struct s3c_csis_info *s3c_csis[S3C_CSIS_CH_NUM];
 
-
-
 static void s3c_csis_update_shadow(struct platform_device *pdev);
 static void s3c_csis_set_resol(struct platform_device *pdev, int width, int height);
 /***{
@@ -74,6 +72,8 @@ void s3c_csis_change_resolution(int csis_id, int width, int height)
  return;
 }
 EXPORT_SYMBOL(s3c_csis_change_resolution);
+
+
 
 
 
@@ -258,13 +258,14 @@ static void s3c_csis_set_hs_settle(struct platform_device *pdev, int settle)
 #endif
 ///#ifdef CONFIG_VIDEO_S5K4ECGX
 int mipi_start = 0;//zxz 2012-3-21 temp for 5m sensor
+extern int mipid_start;
 ///#endif
 void s3c_csis_start(int csis_id, int lanes, int settle, int align, int width, \
 				int height, int pixel_format)
 {
 	struct platform_device *pdev = NULL;
 	struct s3c_platform_csis *pdata = NULL;
-
+	printk("\n =======CRYSTALcsis %s %d\n",__func__,__LINE__);
 	/* clock & power on */
 	pdev = to_platform_device(s3c_csis[csis_id]->dev);
 	pdata = to_csis_plat(&pdev->dev);
@@ -284,11 +285,14 @@ void s3c_csis_start(int csis_id, int lanes, int settle, int align, int width, \
 	s3c_csis_set_data_align(pdev, align);
 	s3c_csis_set_wclk(pdev, 1);
 	if (pixel_format == V4L2_PIX_FMT_JPEG)
-		s3c_csis_set_format(pdev, MIPI_USER_DEF_PACKET_1);
-	else if (pixel_format == V4L2_PIX_FMT_SGRBG10)
-		s3c_csis_set_format(pdev, MIPI_CSI_RAW10);
-	else
+	{printk(" FMT %s  %d\n",__func__,__LINE__);
+		s3c_csis_set_format(pdev, MIPI_USER_DEF_PACKET_1);}
+	else if (pixel_format == V4L2_PIX_FMT_SGRBG10){
+		printk(" FMT %s  %d\n",__func__,__LINE__);
+		s3c_csis_set_format(pdev, MIPI_CSI_RAW10);}
+	else{ printk(" FMT %s  %d\n",__func__,__LINE__);
 		s3c_csis_set_format(pdev, MIPI_CSI_YCBCR422_8BIT);
+	}
 	s3c_csis_set_resol(pdev, width, height);
 	s3c_csis_update_shadow(pdev);
 #endif
@@ -298,17 +302,17 @@ void s3c_csis_start(int csis_id, int lanes, int settle, int align, int width, \
 	s3c_csis_phy_on(pdev);
 
 	err_print_cnt = 0;
-///#ifdef CONFIG_VIDEO_S5K4ECGX
+	///#ifdef CONFIG_VIDEO_S5K4ECGX
 	mipi_start = 1;//zxz 2012-3-21 temp for 5m sensor
-///#endif
-	info("++Samsung MIPI-CSIS%d operation started\n", pdev->id);
+	///#endif
+	info("Samsung MIPI-CSIS%d operation started\n", pdev->id);
 }
 
 void s3c_csis_stop(int csis_id)
 {
 	struct platform_device *pdev = NULL;
 	struct s3c_platform_csis *pdata = NULL;
-
+	printk("\n =======CRYSTALcsis %s %d\n",__func__,__LINE__);
 	pdev = to_platform_device(s3c_csis[csis_id]->dev);
 	pdata = to_csis_plat(&pdev->dev);
 
@@ -316,8 +320,8 @@ void s3c_csis_stop(int csis_id)
 	s3c_csis_system_off(pdev);
 	s3c_csis_phy_off(pdev);
 
-	if (pdata->cfg_phy_global)
-		pdata->cfg_phy_global(0);
+//	if (pdata->cfg_phy_global)
+//		pdata->cfg_phy_global(0);
 
 	if (pdata->clk_off) {
 		if (s3c_csis[csis_id]->clock != NULL)
@@ -326,7 +330,6 @@ void s3c_csis_stop(int csis_id)
 	///#ifdef CONFIG_VIDEO_S5K4ECGX
 	mipi_start = 0;//zxz 2012-3-21 temp for 5m sensor
 	///#endif
-	info("++Samsung MIPI-CSIS operation stop\n");
 }
 
 static irqreturn_t s3c_csis_irq(int irq, void *dev_id)

@@ -120,9 +120,6 @@
 #define S3C_WPALCON_H		(0x019C)	/* Window Palette control */
 #define S3C_WPALCON_L		(0x01A0)	/* Window Palette control */
 
-#define S3C_I80IFCONA0		(0x01B0)	/* I80 Interface control 0 for Main LDI */
-#define S3C_TRIGCON		(0x01A4)	/* I80 / RGB Trigger Control Regiter	*/
-
 #define S3C_VIDW0ALPHA0		(0x0200)	/* Window 0 alpha value 0 */
 #define S3C_VIDW0ALPHA1		(0x0204)	/* Window 0 alpha value 1 */
 #define S3C_VIDW1ALPHA0		(0x0208)	/* Window 1 alpha value 0 */
@@ -139,8 +136,6 @@
 #define S3C_BLENDEQ3		(0x024C)	/* Window 3 blending equation control */
 #define S3C_BLENDEQ4		(0x0250)	/* Window 4 blending equation control */
 #define S3C_BLENDCON		(0x0260)	/* Blending control */
-#define S3C_DUALRGB		(0x027C)	/* DUALRGB INTERFACE SETTING REGISTER */
-#define S3C_SHD_WIN_BASE	(0x4000)	/* Shadow Window control reg Base */
 
 /*
  * Bit Definitions
@@ -405,11 +400,5 @@
 
 /* WxKEYCON1 (1~4) */
 #define S3C_KEYCON1_COLVAL(x)			(((x) & 0xffffff) << 0)
-
-/* DUALRGB */
-#define S3C_DUALRGB_BYPASS_SINGLE	(0 << 0)
-#define S3C_DUALRGB_BYPASS_DUAL	(1 << 0)
-#define S3C_DUALRGB_MIE_DUAL		(2 << 0)
-#define S3C_DUALRGB_MDNIE		(3 << 0)
 
 #endif /* __ASM_PLAT_REGS_FB_S5P_H */

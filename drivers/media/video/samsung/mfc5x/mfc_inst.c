@@ -52,15 +52,10 @@ struct mfc_inst_ctx *mfc_create_inst(void)
 
 	ctx->codecid = -1;
 	ctx->resolution_status = RES_NO_CHANGE;
-#ifdef CONFIG_BUSFREQ
+#if defined(CONFIG_BUSFREQ) ||defined(CONFIG_BUSFREQ_OPP)
 	ctx->busfreq_flag = false;
 #endif
-#if defined(CONFIG_CPU_EXYNOS4210) && defined(CONFIG_EXYNOS4_CPUFREQ)
-	ctx->cpufreq_flag = false;
-#endif
-#ifdef CONFIG_BUSFREQ_OPP
-	ctx->dmcthreshold_flag = false;
-#endif
+
 #ifdef SYSMMU_MFC_ON
 	/*
 	ctx->pgd = __pa(current->mm->pgd);
@@ -73,7 +68,7 @@ struct mfc_inst_ctx *mfc_create_inst(void)
 	return ctx;
 }
 
-void mfc_destroy_inst(struct mfc_inst_ctx *ctx)
+void mfc_destroy_inst(struct mfc_inst_ctx* ctx)
 {
 	struct mfc_dec_ctx *dec_ctx;
 	struct mfc_enc_ctx *enc_ctx;
@@ -109,8 +104,10 @@ void mfc_destroy_inst(struct mfc_inst_ctx *ctx)
 		}
 
 		if (ctx->state >= INST_STATE_OPEN) {
+			//mfc_clock_on();
 			mfc_clock_on(ctx->dev);
 			mfc_cmd_inst_close(ctx);
+			//mfc_clock_off();
 			mfc_clock_off(ctx->dev);
 		}
 
@@ -215,7 +212,6 @@ int mfc_set_inst_cfg(struct mfc_inst_ctx *ctx, int type, void *arg)
 		case MFC_ENC_SETCONF_HIER_P:
 		case MFC_ENC_SETCONF_SEI_GEN:
 		case MFC_ENC_SETCONF_FRAME_PACKING:
-		case MFC_ENC_SETCONF_SPS_PPS_GEN:
 			if (ctx->c_ops->set_codec_cfg) {
 				if ((ctx->c_ops->set_codec_cfg(ctx, type, arg)) < 0)
 					return MFC_SET_CONF_FAIL;
@@ -257,3 +253,4 @@ int mfc_get_inst_cfg(struct mfc_inst_ctx *ctx, int type, void *arg)
 
 	return ret;
 }
+

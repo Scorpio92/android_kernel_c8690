@@ -36,10 +36,10 @@
 #include <mach/regs-pmu.h>
 
 #include "fimc.h"
-extern int Continous_flag_fimc;
 
 char buf[32];
 struct fimc_global *fimc_dev;
+extern void register_fimc_is_dev(void);
 
 void s3c_fimc_irq_work(struct work_struct *work)
 {
@@ -178,6 +178,7 @@ static inline u32 fimc_irq_out_single_buf(struct fimc_control *ctrl,
 					break;
 				case V4L2_PIX_FMT_NV12:
 				case V4L2_PIX_FMT_NV21:
+				case V4L2_PIX_FMT_NV16:
 					buf_set.base[FIMC_ADDR_Y] =
 						(dma_addr_t)ctx->fbuf.base;
 					buf_set.base[FIMC_ADDR_CB] =
@@ -186,7 +187,7 @@ static inline u32 fimc_irq_out_single_buf(struct fimc_control *ctrl,
 				case V4L2_PIX_FMT_NV12M:
 					buf_set.base[FIMC_ADDR_Y] = (dma_addr_t)ctx->fbuf.base;
 					buf_set.base[FIMC_ADDR_CB] =
-						ALIGN(buf_set.base[FIMC_ADDR_Y] + y_size, PAGE_SIZE - 1);
+					ALIGN(buf_set.base[FIMC_ADDR_Y] + y_size, PAGE_SIZE - 1);
 					break;
 				case V4L2_PIX_FMT_NV12T:
 					if (rot == 0 || rot == 180)
@@ -284,6 +285,7 @@ static inline u32 fimc_irq_out_multi_buf(struct fimc_control *ctrl,
 			break;
 		case V4L2_PIX_FMT_NV12:		/* fall through */
 		case V4L2_PIX_FMT_NV12T:
+		case V4L2_PIX_FMT_NV16:
 			buf_set.base[FIMC_ADDR_Y]
 				= ctx->dst[next].base[FIMC_ADDR_Y];
 			buf_set.base[FIMC_ADDR_CB]
@@ -523,6 +525,75 @@ static int fimc_add_outgoing_queue(struct fimc_control *ctrl, int i)
 	return 0;
 }
 
+#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628 -- add for sync exif informaiton.
+static void fimc_get_exif_information(struct fimc_control *ctrl, int buf_index)
+{
+	int i;
+	struct v4l2_control is_ctrl;
+
+       /* Exif information*/
+      /*Check flash frame, current exif add to last captured frame. Jiangshanbin 2012/06/07*/
+      is_ctrl.id = V4L2_CID_CAMERA_EXIF_FLASH;
+      is_ctrl.value = 0;
+      v4l2_subdev_call(ctrl->is.sd, core, g_ctrl, &is_ctrl);
+      ctrl->cap->bufs[buf_index].exif.flash= is_ctrl.value;
+            
+      /* Exposure Time */
+      is_ctrl.id = V4L2_CID_CAMERA_EXIF_EXPTIME;
+      is_ctrl.value = 0;
+      v4l2_subdev_call(ctrl->is.sd, core, g_ctrl, &is_ctrl);
+      ctrl->cap->bufs[buf_index].exif.exposure_time.den= is_ctrl.value;
+      
+      /* ISO Speed Rating */
+      is_ctrl.id = V4L2_CID_CAMERA_EXIF_ISO;
+      is_ctrl.value = 0;
+      v4l2_subdev_call(ctrl->is.sd, core, g_ctrl, &is_ctrl);
+      ctrl->cap->bufs[buf_index].exif.iso_speed_rating= is_ctrl.value;
+      
+      /* Brightness */
+      is_ctrl.id = V4L2_CID_CAMERA_EXIF_BV;
+      is_ctrl.value = 0;
+      v4l2_subdev_call(ctrl->is.sd, core, g_ctrl, &is_ctrl);
+      ctrl->cap->bufs[buf_index].exif.brightness.num= is_ctrl.value;
+      
+       /* exposure bias */
+      is_ctrl.id = V4L2_CID_CAMERA_EXIF_EBV;
+      is_ctrl.value = 0;
+      v4l2_subdev_call(ctrl->is.sd, core, g_ctrl, &is_ctrl);
+      ctrl->cap->bufs[buf_index].exif.brightness.den= is_ctrl.value;
+
+      /* Shutter Speed */
+      is_ctrl.id = V4L2_CID_CAMERA_EXIF_TV;
+      is_ctrl.value = 0;
+      v4l2_subdev_call(ctrl->is.sd, core, g_ctrl, &is_ctrl);
+      ctrl->cap->bufs[buf_index].exif.shutter_speed.den= is_ctrl.value;
+      
+      /* frame_number*/	
+      //ctrl->cap->bufs[buf_index].exif.frame_number= ctrl->is.frame_count;
+
+	//face info
+	is_ctrl.id = V4L2_CID_IS_FD_GET_FACE_COUNT;
+	is_ctrl.value = 0;
+	v4l2_subdev_call(ctrl->is.sd, core, g_ctrl, &is_ctrl);
+	ctrl->cap->bufs[buf_index].face_count = is_ctrl.value;
+
+	i = 0;
+	while (i < ctrl->cap->bufs[buf_index].face_count) {
+		is_ctrl.id = V4L2_CID_IS_FD_GET_FACE_BLINK_LEVEL;
+		is_ctrl.value = i;
+		v4l2_subdev_call(ctrl->is.sd, core, g_ctrl, &is_ctrl);
+		ctrl->cap->bufs[buf_index].face[i].blink_level = is_ctrl.value;
+
+		i++;
+	}
+	is_ctrl.id = V4L2_CID_IS_FD_GET_NEXT;
+	is_ctrl.value = 0;
+	v4l2_subdev_call(ctrl->is.sd, core, g_ctrl, &is_ctrl);
+
+	ctrl->cap->bufs[buf_index].face_offset = 0;
+}
+#endif					
+
 static inline void fimc_irq_cap(struct fimc_control *ctrl)
 {
 	struct fimc_capinfo *cap = ctrl->cap;
@@ -533,6 +604,7 @@ static inline void fimc_irq_cap(struct fimc_control *ctrl)
 	static int is_frame_end_irq;
 	struct v4l2_control is_ctrl;
 	u32 is_fn;
+	//printk("crystal_irq %s  %d \n",__func__,__LINE__);
 	struct s3c_platform_fimc *pdata = to_fimc_plat(ctrl->dev);
 	is_ctrl.id = 0;
 	is_ctrl.value = 0;
@@ -554,18 +626,9 @@ static inline void fimc_irq_cap(struct fimc_control *ctrl)
 			pp = fimc_hwget_present_frame_count(ctrl);
 			is_frame_end_irq = 0;
 		} else {
-			//pp = fimc_hwget_before_frame_count(ctrl);
-			if(Continous_flag_fimc==1){
-				//add_lzy for continuous shot (don't skip the first frame)
-			      pp = fimc_hwget_present_frame_count(ctrl);
-			       }
-			else{
-				pp = fimc_hwget_before_frame_count(ctrl);
-				}
+			pp = fimc_hwget_before_frame_count(ctrl);
 		}
-		
-		//fimc_info2("%s[%d]\n", __func__, pp);
-#if 1//yqf.disable for TC4
+		fimc_info2("%s[%d]\n", __func__, pp);
 		if (pp == 0 || ctrl->restart) {
 			if (ctrl->cap->nr_bufs == 1) {
 				fimc_stop_capture(ctrl);
@@ -574,16 +637,6 @@ static inline void fimc_irq_cap(struct fimc_control *ctrl)
 			ctrl->restart = false;
 			return;
 		}
-#else
-		  if (pp == 0) {
-                        if (ctrl->cap->nr_bufs == 1)
-                                pp = fimc_hwget_present_frame_count(ctrl);
-                        else
-                                return;
-                }		
-#endif
-		
-
 		buf_index = pp - 1;
 		if (ctrl->cam->use_isp && fimc_cam_use) {
 			is_ctrl.id = V4L2_CID_IS_GET_FRAME_NUMBER;
@@ -596,6 +649,9 @@ static inline void fimc_irq_cap(struct fimc_control *ctrl)
 				v4l2_subdev_call(ctrl->is.sd, core, g_ctrl,
 					&is_ctrl);
 				if (is_ctrl.value) {
+					#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628 -- add for sync exif informaiton.
+					fimc_get_exif_information(ctrl, buf_index);
+					#endif
 					is_ctrl.id =
 						V4L2_CID_IS_SET_FRAME_VALID;
 					is_ctrl.value = 0;
@@ -613,8 +669,7 @@ static inline void fimc_irq_cap(struct fimc_control *ctrl)
 				ctrl->is.frame_count++;
 			} else {
 			/* Frame lost case */
-				is_ctrl.id =
-					V4L2_CID_IS_GET_LOSTED_FRAME_NUMBER;
+				is_ctrl.id = V4L2_CID_IS_GET_LOSTED_FRAME_NUMBER;
 				is_ctrl.value = 0;
 				v4l2_subdev_call(ctrl->is.sd,
 					core, g_ctrl, &is_ctrl);
@@ -626,7 +681,7 @@ static inline void fimc_irq_cap(struct fimc_control *ctrl)
 				is_ctrl.value = ctrl->is.frame_count;
 				v4l2_subdev_call(ctrl->is.sd,
 					core, s_ctrl, &is_ctrl);
-			}
+			}			
 		}
 		fimc_add_outgoing_queue(ctrl, buf_index);
 		fimc_hwset_output_buf_sequence(ctrl, buf_index,
@@ -635,14 +690,9 @@ static inline void fimc_irq_cap(struct fimc_control *ctrl)
 		framecnt_seq = fimc_hwget_output_buf_sequence(ctrl);
 		available_bufnum = fimc_hwget_number_of_bits(framecnt_seq);
 		fimc_info2("%s[%d] : framecnt_seq: %d, available_bufnum: %d\n",
-			__func__, pp, framecnt_seq, available_bufnum);
-		
+			__func__, ctrl->id, framecnt_seq, available_bufnum);
 		if (ctrl->status != FIMC_BUFFER_STOP) {
-#if 1//yqf.disable.for TC4
-		     if (available_bufnum == 1) {
-#else
-                     if (available_bufnum == 1 || ctrl->cap->nr_bufs == 1) {				
-#endif
+			if (available_bufnum == 1) {
 				ctrl->cap->lastirq = 0;
 				fimc_stop_capture(ctrl);
 				ctrl->status = FIMC_BUFFER_STOP;
@@ -669,7 +719,7 @@ static irqreturn_t fimc_irq(int irq, void *dev_id)
 {
 	struct fimc_control *ctrl = (struct fimc_control *) dev_id;
 	struct s3c_platform_fimc *pdata;
-
+	///printk("crystal_irq %s  %d \n",__func__,__LINE__);
 	if (ctrl->cap)
 		fimc_irq_cap(ctrl);
 	else if (ctrl->out)
@@ -1314,8 +1364,9 @@ static int fimc_release(struct file *filp)
 		if (ctrl->power_status == FIMC_POWER_ON)
 			pm_runtime_put_sync(ctrl->dev);
 #endif
+	} else if (ctrl->is.sd) {
+		fimc_is_release_subdev(ctrl);
 	}
-
 	if (atomic_read(&ctrl->in_use) == 0) {
 #if (!defined(CONFIG_EXYNOS_DEV_PD) || !defined(CONFIG_PM_RUNTIME))
 		if (pdata->clk_off) {
@@ -1444,6 +1495,18 @@ static const struct v4l2_file_operations fimc_fops = {
 	.poll		= fimc_poll,
 };
 
+/*FIMC0 use unlock ioctl for separate control/data flow. Jiangshanbin 2012/05/30*/
+static const struct v4l2_file_operations fimc_fops_async = {
+	.owner		= THIS_MODULE,
+	.open		= fimc_open,
+	.release	= fimc_release,
+	.unlocked_ioctl	= video_ioctl2,
+	.read		= fimc_read,
+	.write		= fimc_write,
+	.mmap		= fimc_mmap,
+	.poll		= fimc_poll,
+};
+
 static void fimc_vdev_release(struct video_device *vdev)
 {
 	kfree(vdev);
@@ -1451,7 +1514,7 @@ static void fimc_vdev_release(struct video_device *vdev)
 
 struct video_device fimc_video_device[FIMC_DEVICES] = {
 	[0] = {
-		.fops = &fimc_fops,
+		.fops = &fimc_fops_async,
 		.ioctl_ops = &fimc_v4l2_ops,
 		.release = fimc_vdev_release,
 	},
@@ -1743,6 +1806,7 @@ static int __devinit fimc_probe(struct platform_device *pdev)
 		fimc_err("%s: v4l2 device register failed\n", __func__);
 		goto err_fimc;
 	}
+	ctrl->vd->v4l2_dev = &ctrl->v4l2_dev;
 
 	/* things to initialize once */
 	if (!fimc_dev->initialized) {
@@ -1796,6 +1860,10 @@ static int __devinit fimc_probe(struct platform_device *pdev)
 	ctrl->bus_dev = dev_get(EXYNOS_BUSFREQ_NAME);
 #endif
 
+	if(pdev->id == 0){		
+		register_fimc_is_dev();
+		printk("\n++++%s+++register_fimc_is_dev",__func__);
+	}
 	return 0;
 
 err_global:

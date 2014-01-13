@@ -189,12 +189,14 @@ obj-$(CONFIG_VIDEO_OMAP1)		+= omap1_camera.o
 
 obj-$(CONFIG_VIDEO_SAMSUNG_S5P_FIMC) 	+= s5p-fimc/
 obj-$(CONFIG_VIDEO_SAMSUNG_S5P_MFC)	+= s5p-mfc/
+obj-$(CONFIG_VIDEO_EXYNOS)		+= exynos/
 
 obj-$(CONFIG_ARCH_DAVINCI)		+= davinci/
 
 obj-$(CONFIG_VIDEO_SH_VOU)		+= sh_vou.o
 
 obj-$(CONFIG_VIDEO_AU0828) += au0828/
+obj-$(CONFIG_VIDEO_SAMSUNG)	+= samsung/
 
 obj-$(CONFIG_USB_VIDEO_CLASS)	+= uvc/
 obj-$(CONFIG_VIDEO_SAA7164)     += saa7164/
@@ -208,11 +210,3 @@ obj-$(CONFIG_ARCH_OMAP)	+= omap/
 EXTRA_CFLAGS += -Idrivers/media/dvb/dvb-core
 EXTRA_CFLAGS += -Idrivers/media/dvb/frontends
 EXTRA_CFLAGS += -Idrivers/media/common/tuners
-
-ifeq ($(CONFIG_VIDEO_S5K3H7),y) #highscreen
-obj-$(CONFIG_VIDEO_SAMSUNG)	+= samsung-h/
-obj-$(CONFIG_VIDEO_EXYNOS)		+= exynos-h/
-else #newman
-obj-$(CONFIG_VIDEO_SAMSUNG)	+= samsung/
-obj-$(CONFIG_VIDEO_EXYNOS)		+= exynos/
-endif

@@ -533,6 +533,10 @@ static int fmt_mp_to_sp(const struct v4l2_format *f_mp,
 	return 0;
 }
 
+#if defined(CONFIG_VIDEO_M5MO_ISP_FW_LOAD)
+extern int m5mo_start_load_fw_flag ;	//add charles.hu
+#endif
+
 static long __video_do_ioctl(struct file *file,
 		unsigned int cmd, void *arg)
 {
@@ -1310,6 +1314,16 @@ static long __video_do_ioctl(struct file *file,
 	/* FIXME: Inputs can be handled inside videodev2 */
 	case VIDIOC_ENUMINPUT:
 	{
+//Cellon add begin , charles.hu 2012/09/13	
+#if defined(CONFIG_VIDEO_M5MO_ISP_FW_LOAD)
+		unsigned int *i = arg ;
+		if( *i == 44 ){
+			m5mo_start_load_fw_flag = 1 ;
+			return 0;
+		}
+#endif		
+//Cellon add begin , charles.hu 2012/09/13		
+		
 		struct v4l2_input *p = arg;
 
 		/*
@@ -1352,8 +1366,8 @@ static long __video_do_ioctl(struct file *file,
 	}
 	case VIDIOC_S_INPUT:
 	{
-		unsigned int *i = arg;
-
+		unsigned int *i = arg ;
+		
 		if (!ops->vidioc_s_input)
 			break;
 		dbgarg(cmd, "value=%d\n", *i);

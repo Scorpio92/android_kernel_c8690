@@ -419,8 +419,16 @@ void global_dirty_limits(unsigned long *pbackground, unsigned long *pdirty)
 	if (vm_dirty_bytes)
 		dirty = DIV_ROUND_UP(vm_dirty_bytes, PAGE_SIZE);
 	else
-		dirty = (vm_dirty_ratio * available_memory) / 100;
-
+// Cellon add start, Ted Shi, 2012/10/22, for UMS read write too low
+	{
+		int dirty_ratio;
+		dirty_ratio = vm_dirty_ratio;
+		if (dirty_ratio < 5)
+			dirty_ratio = 5;
+//		dirty = (vm_dirty_ratio * available_memory) / 100;
+		dirty = (dirty_ratio * available_memory) / 100;
+	}
+// Cellon add end, Ted Shi, 2012/10/22
 	if (dirty_background_bytes)
 		background = DIV_ROUND_UP(dirty_background_bytes, PAGE_SIZE);
 	else

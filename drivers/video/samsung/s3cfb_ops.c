@@ -15,12 +15,6 @@
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 
-#include <linux/file.h>
-#include <linux/fs.h>
-#include <linux/sw_sync.h>
-#include <plat/regs-fb.h>
-#include <plat/regs-fb-s5p.h>
-
 #if defined(CONFIG_CMA)
 #include <linux/cma.h>
 #elif defined(CONFIG_S5P_MEM_BOOTMEM)
@@ -34,8 +28,6 @@
 #include <linux/suspend.h>
 #endif
 
-#include <mach/sec_debug.h>
-#include <linux/bootmem.h>
 #include <linux/delay.h>
 #include "s3cfb.h"
 
@@ -47,14 +39,6 @@
 #define CMA_REGION_VIDEO	"video"
 #else
 #define CMA_REGION_VIDEO	"fimd"
-#endif
-
-#ifdef CONFIG_BUSFREQ_OPP
-#include <mach/dev.h>
-#endif
-
-#ifdef CONFIG_FB_S5P_SYSMMU
-#include <plat/s5p-sysmmu.h>
 #endif
 
 static bool lcd_logo_init = true;
@@ -1156,145 +1140,15 @@ int s3cfb_cursor(struct fb_info *fb, struct fb_cursor *cursor)
 	return 0;
 }
 
-#if !defined(CONFIG_FB_S5P_VSYNC_THREAD)
 int s3cfb_wait_for_vsync(struct s3cfb_global *fbdev)
 {
 	dev_dbg(fbdev->dev, "waiting for VSYNC interrupt\n");
-
+	//s3p_dsim_clock_lp();	//fly 
 	sleep_on_timeout(&fbdev->wq, HZ / 10);
 
 	dev_dbg(fbdev->dev, "got a VSYNC interrupt\n");
 
 	return 0;
-}
-#endif
-
-void s3c_fb_update_regs(struct s3cfb_global *fbdev, struct s3c_reg_data *regs)
-{
-	struct s3c_platform_fb *pdata = to_fb_plat(fbdev->dev);
-	unsigned short i;
-	bool wait_for_vsync;
-	struct s3cfb_window *win;
-
-#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
-#ifdef CONFIG_BUSFREQ_OPP
-	unsigned int new_num_of_win = 0;
-	unsigned int pre_num_of_win = 0;
-	unsigned int shadow_regs = 0;
-	unsigned int clkval = 0;
-
-	for (i = 0; i < pdata->nr_wins; i++)
-		if (regs->shadowcon & SHADOWCON_CHx_ENABLE(i))
-			new_num_of_win++;
-	shadow_regs = readl(fbdev->regs + S3C_WINSHMAP);
-	for (i = 0; i < pdata->nr_wins; i++)
-		if (shadow_regs & SHADOWCON_CHx_ENABLE(i))
-			pre_num_of_win++;
-
-	if (pre_num_of_win < new_num_of_win) {
-		switch(new_num_of_win) {
-		case 0:
-		case 1:
-			clkval = 100100;
-			break;
-		case 2:
-			clkval = 133133;
-			break;
-		case 3:
-			clkval = 133133;
-			break;
-		case 4:
-			clkval = 133133;
-			break;
-		case 5:
-			clkval = 133133;
-			break;
-		}
-		dev_lock(fbdev->bus_dev, fbdev->dev, clkval);
-	}
-#endif
-#endif
-
-	for (i = 0; i < pdata->nr_wins; i++)
-		s3cfb_set_window_protect(fbdev, i, 1);
-
-	for (i = 0; i < pdata->nr_wins; i++) {
-		win = fbdev->fb[i]->par;
-		writel(regs->wincon[i], fbdev->regs + S3C_WINCON(i));
-		writel(regs->vidosd_a[i], fbdev->regs + S3C_VIDOSD_A(i));
-		writel(regs->vidosd_b[i], fbdev->regs + S3C_VIDOSD_B(i));
-		writel(regs->vidosd_c[i], fbdev->regs + S3C_VIDOSD_C(i));
-		if (i == 1 || i == 2)
-			writel(regs->vidosd_d[i], fbdev->regs + S3C_VIDOSD_D(i));
-		writel(regs->vidw_buf_start[i],
-				fbdev->regs + S3C_VIDADDR_START0(i));
-		writel(regs->vidw_buf_end[i],
-				fbdev->regs + S3C_VIDADDR_END0(i));
-		writel(regs->vidw_buf_size[i],
-				fbdev->regs + S3C_VIDADDR_SIZE(i));
-
-		win->enabled = !!(regs->wincon[i] & WINCONx_ENWIN);
-	}
-
-	writel(regs->shadowcon, fbdev->regs + S3C_WINSHMAP);
-
-	for (i = 0; i < pdata->nr_wins; i++)
-		s3cfb_set_window_protect(fbdev, i, 0);
-
-	do {
-#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
-		s3cfb_wait_for_vsync(fbdev, 0);
-#else
-		s3cfb_wait_for_vsync(fbdev);
-#endif
-		wait_for_vsync = false;
-
-		for (i = 0; i < pdata->nr_wins; i++) {
-			u32 new_start = regs->vidw_buf_start[i];
-			u32 shadow_start = s3cfb_get_win_cur_buf_addr(fbdev, i);
-			if (unlikely(new_start != shadow_start)) {
-				wait_for_vsync = true;
-				break;
-			}
-		}
-	} while (wait_for_vsync);
-
-	sw_sync_timeline_inc(fbdev->timeline, 1);
-
-#ifdef CONFIG_FB_S5P_SYSMMU
-       if ((fbdev->sysmmu.enabled == false) &&
-                       (fbdev->sysmmu.pgd)) {
-               fbdev->sysmmu.enabled = true;
-               s5p_sysmmu_enable(fbdev->dev,
-                               (unsigned long)virt_to_phys((unsigned int*)fbdev->sysmmu.pgd));
-       }
-#endif
-
-#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
-#ifdef CONFIG_BUSFREQ_OPP
-	if (pre_num_of_win > new_num_of_win) {
-		switch(new_num_of_win) {
-		case 0:
-		case 1:
-			clkval = 100100;
-			break;
-		case 2:
-			clkval = 133133;
-			break;
-		case 3:
-			clkval = 133133;
-			break;
-		case 4:
-			clkval = 133133;
-			break;
-		case 5:
-			clkval = 133133;
-			break;
-		}
-		dev_lock(fbdev->bus_dev, fbdev->dev, clkval);
-	}
-#endif
-#endif
 }
 
 int s3cfb_ioctl(struct fb_info *fb, unsigned int cmd, unsigned long arg)
@@ -1322,34 +1176,7 @@ int s3cfb_ioctl(struct fb_info *fb, unsigned int cmd, unsigned long arg)
 
 	switch (cmd) {
 	case FBIO_WAITFORVSYNC:
-		if (fbdev->regs == 0)
-			return 0;
-#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
-#ifdef CONFIG_CPU_EXYNOS4412
-		if (!fbdev->regs)
-			return ret;
-#endif
-#if !defined(CONFIG_FB_S5P_VSYNC_THREAD)
-		/* Enable Vsync */
-		s3cfb_set_global_interrupt(fbdev, 1);
-		s3cfb_set_vsync_interrupt(fbdev, 1);
-#endif
-#endif
-		/* Wait for Vsync */
-#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
-		s3cfb_wait_for_vsync(fbdev, HZ/10);
-#else
 		s3cfb_wait_for_vsync(fbdev);
-#endif
-		if (fbdev->regs == 0)
-			return 0;
-#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
-#if !defined(CONFIG_FB_S5P_VSYNC_THREAD)
-		/* Disable Vsync */
-		s3cfb_set_global_interrupt(fbdev, 0);
-		s3cfb_set_vsync_interrupt(fbdev, 0);
-#endif
-#endif
 		break;
 
 	case S3CFB_WIN_POSITION:

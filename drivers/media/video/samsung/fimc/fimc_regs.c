@@ -253,6 +253,27 @@ int fimc_hwset_image_effect(struct fimc_control *ctrl)
 	return 0;
 }
 
+int fimc_hwset_shadow_enable(struct fimc_control *ctrl)
+{
+	u32 cfg = readl(ctrl->regs + S3C_CIGCTRL);
+
+	cfg &= ~S3C_CIGCTRL_SHADOW_DISABLE;
+
+	writel(cfg, ctrl->regs + S3C_CIGCTRL);
+
+	return 0;
+}
+
+int fimc_hwset_shadow_disable(struct fimc_control *ctrl)
+{
+	u32 cfg = readl(ctrl->regs + S3C_CIGCTRL);
+
+	cfg |= S3C_CIGCTRL_SHADOW_DISABLE;
+
+	writel(cfg, ctrl->regs + S3C_CIGCTRL);
+
+	return 0;
+}
 static void fimc_reset_cfg(struct fimc_control *ctrl)
 {
 	int i;
@@ -1180,75 +1201,7 @@ int fimc_hwset_ext_rgb(struct fimc_control *ctrl, int enable)
 
 	return 0;
 }
-int fimc_debug(struct fimc_control *ctrl)
-{
-	u32 cfg ;
-	#if 0
-	printk("----------------------%d----------------\n",ctrl->id);
-	cfg = readl(ctrl->regs + S3C_CISRCFMT);
-	printk(" S3C_CISRCFMT =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CIWDOFST);
-	printk(" S3C_CIWDOFST =0x%x\n",cfg);
 
-	cfg = readl(ctrl->regs + S3C_CIGCTRL);
-	printk(" S3C_CIGCTRL =0x%x\n",cfg);
-
-	cfg = readl(ctrl->regs + S3C_CIWDOFST2);
-	printk(" S3C_CIWDOFST2 =0x%x\n",cfg);
-
-	cfg = readl(ctrl->regs + S3C_CISCPRERATIO);
-	printk(" S3C_CISCPRERATIO =0x%x\n",cfg);
-
-	cfg = readl(ctrl->regs + S3C_CISCPREDST);
-	printk(" S3C_CISCPREDST =0x%x\n",cfg);
-
-	cfg = readl(ctrl->regs + S3C_CISCCTRL);
-	printk(" S3C_CISCCTRL =0x%x\n",cfg);
-
-	cfg = readl(ctrl->regs + S3C_CITAREA);
-	printk(" S3C_CITAREA =0x%x\n",cfg);
-
-	cfg = readl(ctrl->regs + S3C_CISTATUS);
-	printk(" S3C_CISTATUS =0x%x\n",cfg);
-
-	cfg = readl(ctrl->regs + S3C_CIIMGCPT);
-	printk(" S3C_CIIMGCPT =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CICPTSEQ);
-	printk(" S3C_CICPTSEQ =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CIIMGEFF);
-	printk(" S3C_CIIMGEFF =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CIILINESKIP_Y);
-	printk(" S3C_CIILINESKIP_Y =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CIILINESKIP_CB);
-	printk(" S3C_CIILINESKIP_CB =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CIILINESKIP_CR);
-	printk(" S3C_CIILINESKIP_CR =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CIREAL_ISIZE);
-	printk(" S3C_CIREAL_ISIZE =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_MSCTRL);
-	printk(" S3C_MSCTRL =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CIOYOFF);
-	printk(" S3C_CIOYOFF =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CIOCBOFF);
-	printk(" S3C_CIOCBOFF =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CIIYOFF);
-	printk(" S3C_CIIYOFF =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_ORGISIZE);
-	printk(" S3C_ORGISIZE =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_ORGOSIZE);
-	printk(" S3C_ORGOSIZE =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CIEXTEN);
-	printk(" S3C_CIEXTEN =0x%x\n",cfg);
-	
-	cfg = readl(ctrl->regs + S3C_CIOCTRL);
-	printk(" S3C_CIOCTRL =0x%x\n",cfg);
-	cfg = readl(ctrl->regs + S3C_CITRGFMT);
-	printk(" S3C_CITRGFMT =0x%x\n",cfg);
-	printk("--------------------------------------\n\n");
-	#endif
-	
-
-}
 int fimc_hwset_enable_capture(struct fimc_control *ctrl, u32 bypass)
 {
 	u32 cfg = readl(ctrl->regs + S3C_CIIMGCPT);
@@ -2127,27 +2080,3 @@ void fimc_reset_status_reg(struct fimc_control *ctrl)
 {
 	writel(0x0, ctrl->regs + S3C_CISTATUS);
 }
-
-int fimc_hwset_shadow_disable(struct fimc_control *ctrl)
-{
-	u32 cfg = readl(ctrl->regs + S3C_CIGCTRL);
-
-	cfg |= S3C_CIGCTRL_SHADOW_DISABLE;
-
-	writel(cfg, ctrl->regs + S3C_CIGCTRL);
-
-	return 0;
-}
-
-
-int fimc_hwset_shadow_enable(struct fimc_control *ctrl)
-{
-	u32 cfg = readl(ctrl->regs + S3C_CIGCTRL);
-
-	cfg &= ~S3C_CIGCTRL_SHADOW_DISABLE;
-
-	writel(cfg, ctrl->regs + S3C_CIGCTRL);
-
-	return 0;
-}
-

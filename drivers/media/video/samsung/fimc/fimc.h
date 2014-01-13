@@ -38,6 +38,8 @@
 #include <linux/pm_runtime.h>
 #endif
 
+#define CONFIG_MACH_STUTTGART 1
+
 #define FIMC_NAME		"s3c-fimc"
 #define FIMC_CMA_NAME		"fimc"
 
@@ -62,7 +64,7 @@
 #define FIMC_TPID		3
 #define FIMC_CAPBUFS		32
 #define FIMC_ONESHOT_TIMEOUT	200
-#define FIMC_DQUEUE_TIMEOUT	1000
+#define FIMC_DQUEUE_TIMEOUT	HZ/10
 #define FIMC_FIFOOFF_CNT	1000000 /* Sufficiently big value for stop */
 
 #define FORMAT_FLAGS_PACKED	0x1
@@ -103,6 +105,16 @@
 
 #define L2_FLUSH_ALL	SZ_1M
 #define L1_FLUSH_ALL	SZ_64K
+
+//Lenovo extensions
+enum CAMERA_MODE{
+	CAMERA_PREVIEW = 0,
+	CAMERA_RECORD,
+	CAMERA_CAPTURE,
+	CAMERA_CAPTURE_INIT,
+       CAMERA_POSTVIEW =4,
+       CAMERA_STOPPREVIEW =5,
+};
 
 /*
  * ENUMERATIONS
@@ -235,6 +247,39 @@ struct fimc_overlay {
 };
 
 /* general buffer */
+#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628 -- add for sync exif informaiton.
+struct rational_t {
+	u32 num;
+	u32 den;
+};
+
+struct srational_t {
+	s32 num;
+	s32 den;
+};
+
+struct exif_attribute {
+	struct rational_t exposure_time;
+	struct srational_t shutter_speed;
+	u32 iso_speed_rating;
+	u32 flash;
+	struct srational_t brightness;
+};
+
+#define MAX_FACE_COUNT		16
+struct face_marker {
+	u32	frame_number;
+	//struct is_fd_rect face;
+	//struct is_fd_rect left_eye;
+	//struct is_fd_rect right_eye;
+	//struct is_fd_rect mouth;
+	u32	roll_angle;
+	u32	yaw_angle;
+	u32	confidence;
+	s32	smile_level;
+	s32	blink_level;
+};
+#endif
 struct fimc_buf_set {
 	int			id;
 	dma_addr_t		base[4];
@@ -245,6 +290,12 @@ struct fimc_buf_set {
 	u32			flags;
 	atomic_t		mapped_cnt;
 	struct list_head	list;
+#ifdef CONFIG_MACH_STUTTGART //##mmkim 0628-- add for sync exif informaiton.
+	struct exif_attribute	exif;
+	struct face_marker      face[MAX_FACE_COUNT];
+	u32 face_count;
+	u32 face_offset;
+#endif
 };
 
 /* for capture device */
@@ -710,6 +761,8 @@ extern int fimc_hwget_present_frame_count(struct fimc_control *ctrl);
 extern int fimc_hwget_output_buf_sequence(struct fimc_control *ctrl);
 extern int fimc_hwget_check_framecount_sequence(struct fimc_control *ctrl, u32 frame);
 extern int fimc_hwset_image_effect(struct fimc_control *ctrl);
+extern int fimc_hwset_shadow_enable(struct fimc_control *ctrl);
+extern int fimc_hwset_shadow_disable(struct fimc_control *ctrl);
 extern int fimc_hwset_sysreg_camblk_fimd0_wb(struct fimc_control *ctrl);
 extern int fimc_hwset_sysreg_camblk_fimd1_wb(struct fimc_control *ctrl);
 extern int fimc_hwset_sysreg_camblk_isp_wb(struct fimc_control *ctrl);
@@ -719,7 +772,6 @@ extern void fimc_hwset_disable_frame_end_irq(struct fimc_control *ctrl);
 extern void fimc_reset_status_reg(struct fimc_control *ctrl);
 /* IPC related file */
 extern void ipc_start(void);
-extern int fimc_debug(struct fimc_control *ctrl);
 
 /*
  * DRIVER HELPERS
