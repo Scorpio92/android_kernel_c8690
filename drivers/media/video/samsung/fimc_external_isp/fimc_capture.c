@@ -1874,8 +1874,14 @@ int fimc_querybuf_capture(void *fh, struct v4l2_buffer *b)
 	struct fimc_capinfo *cap = ctrl->cap;
 
 	if (ctrl->status != FIMC_STREAMOFF) {
+//Cellon add charles.hu , 2013-04-24 , begin ,		
+		mdelay(2000);
+		if (ctrl->status != FIMC_STREAMOFF){
+			printk(" %s %d \n",__FUNCTION__,__LINE__);
+//Cellon add charles.hu , 2013-04-24 , end ,				
 		fimc_err("fimc is running\n");
 		return -EBUSY;
+		}
 	}
 
 	mutex_lock(&ctrl->v4l2_lock);
@@ -2785,7 +2791,7 @@ int fimc_streamoff_capture(void *fh)
 	struct s3c_platform_fimc *pdata = to_fimc_plat(ctrl->dev);
 	int ret = 0;
 	printk(" =====%s  %d ====\n",__FUNCTION__,__LINE__);
-        fimc_dbg("%s\n", __func__);
+    	fimc_dbg("%s\n", __func__);
 	if (fimc_check_capture_source(ctrl)) {
 		fimc_err("%s: No capture device.\n", __func__);
 		return -ENODEV;
