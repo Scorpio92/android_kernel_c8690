@@ -8,4 +8,9 @@ config SRCARCH
 	string
 	option env="SRCARCH"
 
+config CC_OPTIMIZE_MORE
+	bool "CC_OPTIMIZE_MORE"
+	depends on TC4_ICS=y
+	default y
+
 source "arch/$SRCARCH/Kconfig"
