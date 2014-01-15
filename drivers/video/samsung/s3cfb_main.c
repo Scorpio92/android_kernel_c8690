@@ -82,51 +82,6 @@ inline struct s3cfb_global *get_fimd_global(int id)
 	return fbdev;
 }
 
-/////////////////////////////////////////////////////add by isuma
-//For vsync report
-static long long s3cfb_get_system_time(void)
-{
- long long vsync;
-#if 0// much more precise
- struct timeval tv;
- do_gettimeofday(&tv);
- vsync = (long long)(tv.tv_sec)*1000000000LL + tv.tv_usec*1000;
- //printk("do_gettimeofday sec:%d usec:%d\n",tv.tv_sec,tv.tv_usec);
-#else//do_gettimeofday is preciser than current_kernel_time and ktime_get_ts, but not match with userspace
- struct timespec ts;
- //ts = current_kernel_time();
- ktime_get_ts(&ts);
- vsync = (long long)(ts.tv_sec)*1000000000LL + ts.tv_nsec;
- //printk("current_kernel_time sec:%d nsec:%d\n",ts.tv_sec,ts.tv_nsec);
-#endif
- return vsync;
-}
-static void s3c_vsync_kobject_uevent(void)
-{
- char env_buf[120];
- char *envp[2];
- int env_offset = 0;
- long long cur_vsync;
-
- cur_vsync = s3cfb_get_system_time();
- sprintf(env_buf, "VSYNC=%lld",cur_vsync);
- envp[env_offset++] = env_buf;
- envp[env_offset] = NULL;
- kobject_uevent_env(&( fbfimd->fbdev[0]->dev->kobj), KOBJ_CHANGE, envp);
-
-}
-static DECLARE_WORK(vsync_work, (void *)s3c_vsync_kobject_uevent);
-static ssize_t s3cfb_sysfs_show_vsync_report(struct device *dev, struct device_attribute *attr,char *buf)
-{
- long long cur_vsync;
- cur_vsync = s3cfb_get_system_time();
- return sprintf(buf, "%lld\n",cur_vsync);
-}
-
-static DEVICE_ATTR(vsync_report, S_IRUGO | S_IWUSR, s3cfb_sysfs_show_vsync_report,NULL);
-
-/////////////////////////////////////////////////////
-
 int s3cfb_vsync_status_check(void)
 {
 	struct s3cfb_global *fbdev[2];
