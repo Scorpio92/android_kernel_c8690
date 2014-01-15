@@ -57,6 +57,10 @@
 #include <plat/s5p-sysmmu.h>
 #endif
 
+static unsigned int bootloaderfb;
+module_param_named(bootloaderfb, bootloaderfb, uint, 0444);
+MODULE_PARM_DESC(bootloaderfb, "Address of booting logo image in Bootloader");
+
 static bool lcd_logo_init = true;
 
 struct s3c_platform_fb *to_fb_plat(struct device *dev)
@@ -152,12 +156,54 @@ int window_on_off_status(struct s3cfb_global *fbdev)
 }
 #endif
 
+#ifdef FEATURE_BUSFREQ_LOCK
+void s3cfb_busfreq_lock(struct s3cfb_global *fbdev, unsigned int lock)
+{
+	if (lock) {
+		if (atomic_read(&fbdev->busfreq_lock_cnt) == 0) {
+			exynos4_busfreq_lock(DVFS_LOCK_ID_LCD, BUS_L1);
+			dev_info(fbdev->dev, "[%s] Bus Freq Locked L1\n", __func__);
+		}
+		atomic_inc(&fbdev->busfreq_lock_cnt);
+		fbdev->busfreq_flag = true;
+	} else {
+		if (fbdev->busfreq_flag == true) {
+			atomic_dec(&fbdev->busfreq_lock_cnt);
+			fbdev->busfreq_flag = false;
+			if (atomic_read(&fbdev->busfreq_lock_cnt) == 0) {
+				/* release Freq lock back to normal */
+				exynos4_busfreq_lock_free(DVFS_LOCK_ID_LCD);
+				dev_info(fbdev->dev, "[%s] Bus Freq lock Released Normal !!\n", __func__);
+			}
+		}
+	}
+}
+#endif
+
 int s3cfb_enable_window(struct s3cfb_global *fbdev, int id)
 {
 	struct s3cfb_window *win = fbdev->fb[id]->par;
+#ifdef FEATURE_BUSFREQ_LOCK
+	int enabled_win = 0;
+#endif
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+#ifdef CONFIG_BUSFREQ_OPP
+	if (CONFIG_FB_S5P_DEFAULT_WINDOW == 3 &&
+		id == CONFIG_FB_S5P_DEFAULT_WINDOW-1)
+		dev_lock(fbdev->bus_dev, fbdev->dev, 267160);
+	else if (id != CONFIG_FB_S5P_DEFAULT_WINDOW)
+		dev_lock(fbdev->bus_dev, fbdev->dev, 133133);
+#endif
+#endif
 
 	if (!win->enabled)
 		atomic_inc(&fbdev->enabled_win);
+
+#ifdef FEATURE_BUSFREQ_LOCK
+	enabled_win = atomic_read(&fbdev->enabled_win);
+	if (enabled_win >= 2)
+		s3cfb_busfreq_lock(fbdev, 1);
+#endif
 
 	if (s3cfb_window_on(fbdev, id)) {
 		win->enabled = 0;
@@ -171,15 +217,35 @@ int s3cfb_enable_window(struct s3cfb_global *fbdev, int id)
 int s3cfb_disable_window(struct s3cfb_global *fbdev, int id)
 {
 	struct s3cfb_window *win = fbdev->fb[id]->par;
+#ifdef FEATURE_BUSFREQ_LOCK
+	int enabled_win = 0;
+#endif
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+#ifdef CONFIG_BUSFREQ_OPP
+	int win_status;
+#endif
+#endif
 
 	if (win->enabled)
 		atomic_dec(&fbdev->enabled_win);
 
-	if (s3cfb_window_off(fbdev, id)) {
+	if (fbdev->regs != 0 && s3cfb_window_off(fbdev, id)) {
 		win->enabled = 1;
 		return -EFAULT;
 	} else {
+#ifdef FEATURE_BUSFREQ_LOCK
+		enabled_win = atomic_read(&fbdev->enabled_win);
+		if (enabled_win < 2)
+			s3cfb_busfreq_lock(fbdev, 0);
+#endif
 		win->enabled = 0;
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+#ifdef CONFIG_BUSFREQ_OPP
+		win_status = window_on_off_status(fbdev);
+		if ((win_status & ~(1 << CONFIG_FB_S5P_DEFAULT_WINDOW)) == 0)
+			dev_unlock(fbdev->bus_dev, fbdev->dev);
+#endif
+#endif
 		return 0;
 	}
 }
@@ -244,10 +310,13 @@ int s3cfb_map_video_memory(struct s3cfb_global *fbdev, struct fb_info *fb)
 {
 	struct fb_fix_screeninfo *fix = &fb->fix;
 	struct s3cfb_window *win = fb->par;
-
 #ifdef CONFIG_CMA
 	struct cma_info mem_info;
 	int err;
+#endif
+
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+	return 0;
 #endif
 
 	if (win->owner == DMA_MEM_OTHER)
@@ -258,11 +327,18 @@ int s3cfb_map_video_memory(struct s3cfb_global *fbdev, struct fb_info *fb)
 	if (err)
 		return err;
 	fix->smem_start = (dma_addr_t)cma_alloc
-		(fbdev->dev, CMA_REGION_VIDEO, (size_t)fix->smem_len, 0);
-	if (IS_ERR_VALUE(fix->smem_start)) {
-		return -EBUSY;
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
+		(fbdev->dev, "fimd_video", (size_t)PAGE_ALIGN(fix->smem_len), 0);
+#else
+		(fbdev->dev, "fimd", (size_t)PAGE_ALIGN(fix->smem_len), 0);
+#endif
+	if (IS_ERR_OR_NULL((char *)fix->smem_start)) {
+		printk(KERN_ERR "fix->smem_start allocation fail (%x)\n",
+				(int)fix->smem_start);
+		return -1;
 	}
-	fb->screen_base = cma_get_virt(fix->smem_start, PAGE_ALIGN(fix->smem_len), 1);
+
+	fb->screen_base = NULL;
 #else
 	fb->screen_base = dma_alloc_writecombine(fbdev->dev,
 						 PAGE_ALIGN(fix->smem_len),
@@ -270,15 +346,11 @@ int s3cfb_map_video_memory(struct s3cfb_global *fbdev, struct fb_info *fb)
 						 &fix->smem_start, GFP_KERNEL);
 #endif
 
-	if (!fb->screen_base)
-		return -ENOMEM;
-	else
-		dev_info(fbdev->dev, "[fb%d] dma: 0x%08x, cpu: 0x%08x, "
-			 "size: 0x%08x\n", win->id,
-			 (unsigned int)fix->smem_start,
-			 (unsigned int)fb->screen_base, fix->smem_len);
+	dev_info(fbdev->dev, "[fb%d] Alloc dma: 0x%08x, "
+			"size: 0x%08x\n", win->id,
+			(unsigned int)fix->smem_start,
+			fix->smem_len);
 
-	memset(fb->screen_base, 0, fix->smem_len);
 	win->owner = DMA_MEM_FIMD;
 
 	return 0;
@@ -289,12 +361,8 @@ int s3cfb_map_default_video_memory(struct s3cfb_global *fbdev,
 {
 	struct fb_fix_screeninfo *fix = &fb->fix;
 	struct s3cfb_window *win = fb->par;
-
 #ifdef CONFIG_CMA
 	struct cma_info mem_info;
-#ifdef CONFIG_FB_S5P_SOFTBUTTON_UI
-	unsigned int reserved_size;
-#endif
 	int err;
 #endif
 
@@ -303,247 +371,41 @@ int s3cfb_map_default_video_memory(struct s3cfb_global *fbdev,
 
 #ifdef CONFIG_CMA
 	err = cma_info(&mem_info, fbdev->dev, CMA_REGION_FIMD);
-	if (ERR_PTR(err))
-		return -ENOMEM;
-#ifdef CONFIG_FB_S5P_SOFTBUTTON_UI
-    if(win->id==4)
-    {
-    dev_info(fbdev->dev, "[fb%d] : mem_info.total_size=%08x", win->id, mem_info.total_size);
-	reserved_size = mem_info.total_size;
+	if (err)
+		return err;
 	fix->smem_start = (dma_addr_t)cma_alloc
-		(fbdev->dev, CMA_REGION_FIMD, (size_t)0x400000, 0);
-	fb->screen_base = cma_get_virt(fix->smem_start, 0x400000, 1);
-	dev_info(fbdev->dev, "[fb%d] : CMA allocated, smem_Start=%08x, reserved_size=%08x,screen_Base=%08x", win->id, (unsigned int)fix->smem_start, 0x400000, (unsigned int)fb->screen_base);
-    }
-    else
-    {
-    dev_info(fbdev->dev, "[fb%d] : mem_info.total_size=%08x", win->id, mem_info.total_size);
-	reserved_size = mem_info.total_size;
-	fix->smem_start = (dma_addr_t)cma_alloc
-		(fbdev->dev, CMA_REGION_FIMD, (size_t)reserved_size-0x400000, 0);
-	fb->screen_base = cma_get_virt(fix->smem_start, reserved_size-0x400000, 1);
-	dev_info(fbdev->dev, "[fb%d] : CMA allocated, smem_Start=%08x, reserved_size=%08x,screen_Base=%08x", win->id, (unsigned int)fix->smem_start, reserved_size-0x300000, (unsigned int)fb->screen_base);
-    } 
-#else
-	fix->smem_start = (dma_addr_t)cma_alloc
-		(fbdev->dev, CMA_REGION_FIMD, (size_t)fix->smem_len, 0);
-	fb->screen_base = cma_get_virt(fix->smem_start, fix->smem_len, 1);
-#endif
+		(fbdev->dev, "fimd", (size_t)PAGE_ALIGN(fix->smem_len), 0);
+	fb->screen_base = cma_get_virt(fix->smem_start, PAGE_ALIGN(fix->smem_len), 1);
 #elif defined(CONFIG_S5P_MEM_BOOTMEM)
 	fix->smem_start = s5p_get_media_memory_bank(S5P_MDEV_FIMD, 1);
 	fix->smem_len = s5p_get_media_memsize_bank(S5P_MDEV_FIMD, 1);
 	fb->screen_base = ioremap_wc(fix->smem_start, fix->smem_len);
+#else
+	fb->screen_base = dma_alloc_writecombine(fbdev->dev,
+						PAGE_ALIGN(fix->smem_len),
+						(unsigned int *)
+						&fix->smem_start, GFP_KERNEL);
 #endif
 
+	if (!fb->screen_base)
+		return -ENOMEM;
+	else
+		dev_info(fbdev->dev, "[fb%d] dma: 0x%08x, cpu: 0x%08x, "
+			"size: 0x%08x\n", win->id,
+			(unsigned int)fix->smem_start,
+			(unsigned int)fb->screen_base, fix->smem_len);
 
-
-#ifdef CONFIG_FB_S5P_SOFTBUTTON_UI
-    dev_info(fbdev->dev, "[fb%d] : fill buffer, length=%08x", win->id, fix->smem_len);
-    if(win->id == 4)
-    {
-
-#define SBUI_LINECOLOR	((unsigned int)(0xa0000000))
-#define SBUI_TEXTCOLOR   ((unsigned int)(0xa0000000))
-#define SBUI_BGCOLOR    ((unsigned int)(0x90ac59ff))
-
-        int i=0;
-        int j=0;
-	bool menu_ar[] = { 1,1,0,0,0,0,0,0,1,1,0,0,1,1,1,1,1,0,0,1,1,0,0,0,0,1,1,0,0,1,1,0,0,0,1,1,
-	                   1,1,1,0,0,0,0,1,1,1,0,0,1,1,0,0,0,0,0,1,1,1,0,0,0,1,1,0,0,1,1,0,0,0,1,1,
-	                   1,0,1,0,0,0,0,1,0,1,0,0,1,1,0,0,0,0,0,1,0,1,0,0,0,1,1,0,0,1,1,0,0,0,1,1,
-	                   1,0,1,0,0,0,0,1,0,1,0,0,1,1,0,0,0,0,0,1,0,0,1,0,0,1,1,0,0,1,1,0,0,0,1,1,
-	                   1,0,0,1,0,0,1,0,0,1,0,0,1,1,1,1,1,0,0,1,0,0,0,1,0,1,1,0,0,1,1,0,0,0,1,1,
-	                   1,0,0,1,0,0,1,0,0,1,0,0,1,1,0,0,0,0,0,1,0,0,0,1,0,1,1,0,0,1,1,0,0,0,1,1,
-	                   1,0,0,0,1,1,0,0,0,1,0,0,1,1,0,0,0,0,0,1,0,0,0,0,1,1,1,0,0,1,1,0,0,0,1,1,
-	                   1,0,0,0,1,1,0,0,0,1,0,0,1,1,0,0,0,0,0,1,0,0,0,0,1,1,1,0,0,0,1,0,0,0,1,0,
-	                   1,0,0,0,0,0,0,0,0,1,0,0,1,1,1,1,1,0,0,1,0,0,0,0,0,1,1,0,0,0,1,1,1,1,1,0};
-
-	bool home_ar[] = { 1,1,0,0,0,0,1,0,0,0,0,1,1,1,1,0,0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,1,1,1,1,1,
-		          	   1,1,0,0,0,0,1,0,0,0,1,0,0,0,0,1,0,0,0,1,1,1,0,0,0,0,1,1,1,0,0,1,1,0,0,0,
-			   		   1,1,0,0,0,0,1,0,0,1,0,0,0,0,0,0,1,0,0,1,0,1,0,0,0,0,1,0,1,0,0,1,1,0,0,0,
-			   		   1,1,0,0,0,0,1,0,0,1,0,0,0,0,0,0,1,0,0,1,0,1,0,0,0,0,1,0,1,0,0,1,1,0,0,0,
-			   		   1,1,1,1,1,1,1,0,0,1,0,0,0,0,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,1,1,1,1,
-			  		   1,1,0,0,0,0,1,0,0,1,0,0,0,0,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,1,0,0,0,
-			  		   1,1,0,0,0,0,1,0,0,1,0,0,0,0,0,0,1,0,0,1,0,0,0,1,1,0,0,0,1,0,0,1,1,0,0,0,
-			  		   1,1,0,0,0,0,1,0,0,0,1,0,0,0,0,1,0,0,0,1,0,0,0,1,1,0,0,0,1,0,0,1,1,0,0,0,
-			  		   1,1,0,0,0,0,1,0,0,0,0,1,1,1,1,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,1,1,1,1};
-
-	bool back_ar[] = {  1,1,1,1,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,1,1,1,0,0,1,0,0,0,0,1,1,
-		           		1,0,0,0,0,1,0,0,0,0,1,1,1,0,0,0,0,0,1,0,0,0,0,0,0,1,0,0,0,1,0,0,
-			   			1,0,0,0,0,0,1,0,0,0,1,0,1,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1,0,0,0,
-			   			1,0,0,0,0,1,0,0,0,0,1,0,1,0,0,0,0,1,0,0,0,0,0,0,0,1,0,1,0,0,0,0,
-			   			1,1,1,1,1,0,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,1,1,0,0,0,0,0,
-			   			1,0,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,1,0,1,0,0,0,0,
-			   			1,0,0,0,0,0,1,0,1,1,1,1,1,1,1,0,0,1,0,0,0,0,0,0,0,1,0,0,1,0,0,0,
-			   			1,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,1,0,0,0,1,0,0,
-			   			1,1,1,1,1,0,0,1,0,0,0,0,0,0,0,1,0,0,0,1,1,1,1,0,0,1,0,0,0,0,1,1};
-
-   		#ifdef  CONFIG_TC4_PORTRAIT_MODE  
-
-        /* touch region y_top=1920, 750, 970, 1150, 1345 */
-        int imt, iml, ihl, ibl, ibr;
-        /*  x=1280, y= 800 */
-        imt = 1;
-        //Y
-        iml = 1;
-        ihl = 108;
-        ibl = 226;
-        ibr = 335;
-		int x, y, x_l, y_l, hit=0;
-
-        for(i=0; i<fb->var.xres; i++){      
-            for(j=0; j<fb->var.yres; j++){
-
-            
-            if(i >= imt - 1 && i <= imt + 1 ){
-                if(j>=iml && j<=ibr)
-                {
-                    *(unsigned int *)(fb->screen_base+j*fb->var.xres*4 + i*4) = SBUI_LINECOLOR;
-                }
-            } else
-            if(i > imt +1){
-#define SBUI_DRAWLINE_CHAIN(limiter)   \
-				if(j>=(limiter-1) && j<=(limiter+1)) \
-				{ *(unsigned int *)(fb->screen_base+j*fb->var.xres*4+i*4) = SBUI_LINECOLOR; } else \
-
-				SBUI_DRAWLINE_CHAIN(iml)
-				SBUI_DRAWLINE_CHAIN(ihl)
-				SBUI_DRAWLINE_CHAIN(ibl)
-				SBUI_DRAWLINE_CHAIN(ibr)
-
-                if(j > iml && j < ibr)
-                {
-
-#define SBUI_FILL_AREA(text_ar)    \
-			if( i >= x && i < x + x_l && j > y - y_l && j <= y) { \
-				if( text_ar[(y-j) + (i-x)*y_l]) \
-					{   *(unsigned int *)(fb->screen_base+j*fb->var.xres*4 + i*4) = SBUI_TEXTCOLOR; } \
-				else{ *(unsigned int *)(fb->screen_base+j*fb->var.xres*4 + i*4) = SBUI_BGCOLOR; } \
-				hit = 1; \
-			}
-
- 				// Menu
-			    hit =0;
-			    y=(ibr - 15);
-			    x=(imt + 20);
-			    x_l=9;
-			    y_l=sizeof(menu_ar)/x_l;
-	
-				SBUI_FILL_AREA(menu_ar);
-		    
-			    // Home
-			    y=(ibl - 15);
-			    y_l=sizeof(home_ar)/x_l;
-
-				SBUI_FILL_AREA(home_ar);
-		    
-			    // Back
-			    y=(ihl - 15);
-			    y_l=sizeof(back_ar)/x_l;
-			
-				SBUI_FILL_AREA(back_ar);
-
-		   		if(!hit)
-		    	{
-                      *(unsigned int *)(fb->screen_base+j*fb->var.xres*4 + i*4) = SBUI_BGCOLOR;
-		    	}
-                }
-            }
-            else{
-               *(unsigned int *)(fb->screen_base+j*fb->var.xres*4 + i*4)= (unsigned int)0x00000000;
-            }
-         }
-	}
-	#else
-
-        /* touch region y_top=1920, 750, 970, 1150, 1345 */
-        int imt, iml, ihl, ibl, ibr;
-        /*  x=1280, y= 800 */
-        imt = 1;
-        iml = 1;
-        ihl = 108;
-        ibl = 226;
-        ibr = 335;
-
-	int x, y, x_l, y_l, hit=0;
-
-        for(i=0; i<fb->var.yres; i++){      
-            for(j=0; j<fb->var.xres*4; j+=4){
-            if(i >= imt - 1 && i <= imt + 1 ){
-                if(j>=iml*4 && j<=ibr*4)
-                {
-                    *(unsigned int *)(fb->screen_base+i*fb->var.xres*4+j) = SBUI_LINECOLOR;
-                }
-            } else
-            if(i > imt +1){
-#define SBUI_DRAWLINE_CHAIN(limiter)   \
-				if(j>=(limiter-1)*4 && j<=(limiter+1)*4) \
-				{ *(unsigned int *)(fb->screen_base+i*fb->var.xres*4+j) = SBUI_LINECOLOR; } else \
-
-				SBUI_DRAWLINE_CHAIN(iml)
-			    SBUI_DRAWLINE_CHAIN(ihl)
-				SBUI_DRAWLINE_CHAIN(ibl)
-				SBUI_DRAWLINE_CHAIN(ibr)
-
-                if(j>iml*4 && j<ibr*4)
-                {
-
-#define SBUI_FILL_AREA(text_ar)    \
-			if( i >= y && i < y + y_l && j >= x && j < x + x_l*4) { \
-				if( text_ar[(j-x)/4 + (i-y)*x_l]) \
-					{   *(unsigned int *)(fb->screen_base+i*fb->var.xres*4 + j) = SBUI_TEXTCOLOR; } \
-				else{ *(unsigned int *)(fb->screen_base+i*fb->var.xres*4 + j) = SBUI_BGCOLOR; } \
-				hit = 1; \
-			}
-
- 		// Menu
-		    hit =0;
-		    x=(iml+15)*4;
-		    y=(imt+20);
-		    y_l=9;
-		    x_l=sizeof(menu_ar)/y_l;
-
-			SBUI_FILL_AREA(menu_ar);
-
-		    // Home
-		    x=(ihl+15)*4;
-		    x_l=sizeof(home_ar)/y_l;
-
-			SBUI_FILL_AREA(home_ar);
-
-		    // Back
-		    x=(ibl+15)*4;
-		    x_l=sizeof(back_ar)/y_l;
-
-			SBUI_FILL_AREA(back_ar);
-
-		    if(!hit)
-		    {
-                       *(unsigned int *)(fb->screen_base+i*fb->var.xres*4+j) = SBUI_BGCOLOR;
-		    }
-                }
-            }
-            else{
-               *(unsigned int *)(fb->screen_base+i*fb->var.xres*4+j) = (unsigned int)0x00000000;
-            }
-            }
-	}
-	
-	#endif
-	
-   }
-    else
-#endif
-    {
-	//memset(fb->screen_base, 0, fix->smem_len);
-//	memcpy(fb->screen_base,  (char __iomem *)__pa(0x64000000),  fix->smem_len);
-	memcpy(fb->screen_base,  (char __iomem *)__pa(0x4c000000),  fix->smem_len);
-    }
-    
+	if (bootloaderfb)
+		memset(fb->screen_base, 0, fix->smem_len);
 	win->owner = DMA_MEM_FIMD;
+
+#ifdef CONFIG_FB_S5P_SYSMMU
+	fbdev->sysmmu.default_fb_addr = fix->smem_start;
+#endif
 
 	return 0;
 }
+
 
 int s3cfb_unmap_default_video_memory(struct s3cfb_global *fbdev,
 					struct fb_info *fb)
@@ -605,11 +467,19 @@ int s3cfb_set_bitfield(struct fb_var_screeninfo *var)
 		break;
 
 	case 32:
+#if defined(CONFIG_FB_RGBA_ORDER)
+		var->red.offset = 0;
+#else
 		var->red.offset = 16;
+#endif
 		var->red.length = 8;
 		var->green.offset = 8;
 		var->green.length = 8;
+#if defined(CONFIG_FB_RGBA_ORDER)
+		var->blue.offset = 16;
+#else
 		var->blue.offset = 0;
+#endif
 		var->blue.length = 8;
 		var->transp.offset = 24;
 		var->transp.length = 8; /* added for LCD RGB32 */
@@ -697,34 +567,22 @@ int s3cfb_check_var(struct fb_var_screeninfo *var, struct fb_info *fb)
 
 void s3cfb_set_win_params(struct s3cfb_global *fbdev, int id)
 {
-#if CONFIG_FB_S5P_SOFTBUTTON_UI
-	struct fb_var_screeninfo *var = &fbdev->fb[id]->var;
-	struct s3cfb_window *win = fbdev->fb[id]->par;
-
-	if(id==4)
-	{
-#ifdef  CONFIG_TC4_PORTRAIT_MODE  
-		win->x = 1236;
-		win->y = 1; //231
-		var->xres = 44;
-		var->yres = 337;
-#else
-		win->x = 494;
-		win->y = 756;
-		var->xres = 337;
-		var->yres = 44;
-#endif
-	}
-#endif
 	s3cfb_set_window_control(fbdev, id);
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+	s3cfb_set_oneshot(fbdev, id);
+#else
 	s3cfb_set_window_position(fbdev, id);
 	s3cfb_set_window_size(fbdev, id);
 	s3cfb_set_buffer_address(fbdev, id);
 	s3cfb_set_buffer_size(fbdev, id);
+#endif
 
 	if (id > 0) {
 		s3cfb_set_alpha_blending(fbdev, id);
 		s3cfb_set_chroma_key(fbdev, id);
+		s3cfb_set_alpha_value_width(fbdev, id);
+		/* Set to premultiplied mode as default */
+		s3cfb_set_alpha_mode(fbdev, id, BLENDING_PREMULT);
 	}
 }
 
@@ -732,8 +590,14 @@ int s3cfb_set_par_window(struct s3cfb_global *fbdev, struct fb_info *fb)
 {
 	struct s3c_platform_fb *pdata = to_fb_plat(fbdev->dev);
 	struct s3cfb_window *win = fb->par;
+	int ret;
 
 	dev_dbg(fbdev->dev, "[fb%d] set_par\n", win->id);
+
+#if (!defined(CONFIG_CPU_EXYNOS4210))
+	if ((win->id != pdata->default_win) && fb->fix.smem_start)
+		s3cfb_unmap_video_memory(fbdev, fb);
+#endif
 
 	/* modify the fix info */
 	if (win->id != pdata->default_win) {
@@ -742,8 +606,11 @@ int s3cfb_set_par_window(struct s3cfb_global *fbdev, struct fb_info *fb)
 		fb->fix.smem_len = fb->fix.line_length * fb->var.yres_virtual;
 	}
 
-	if (win->id != pdata->default_win && !fb->fix.smem_start)
-		s3cfb_map_video_memory(fbdev, fb);
+	if (win->id != pdata->default_win && !fb->fix.smem_start) {
+		ret = s3cfb_map_video_memory(fbdev, fb);
+		if (ret != 0)
+			return ret;
+	}
 
 	s3cfb_set_win_params(fbdev, win->id);
 
@@ -754,17 +621,18 @@ int s3cfb_set_par(struct fb_info *fb)
 {
 	struct s3cfb_window *win = fb->par;
 	struct s3cfb_global *fbdev = get_fimd_global(win->id);
+	int ret = 0;
 
 #ifdef CONFIG_EXYNOS_DEV_PD
-	if (fbdev->system_state == POWER_OFF) {
-		dev_err(fbdev->dev, "system_state is POWER_OFF\n");
+	if (unlikely(fbdev->system_state == POWER_OFF)) {
+		dev_err(fbdev->dev, "%s::system_state is POWER_OFF, fb%d\n", __func__, win->id);
 		return 0;
 	}
 #endif
 
-	s3cfb_set_par_window(fbdev, fb);
+	ret = s3cfb_set_par_window(fbdev, fb);
 
-	return 0;
+	return ret;
 }
 
 int s3cfb_init_fbinfo(struct s3cfb_global *fbdev, int id)
@@ -880,11 +748,7 @@ int s3cfb_alloc_framebuffer(struct s3cfb_global *fbdev, int fimd_id)
 			goto err_alloc_fb;
 		}
 
-#ifdef CONFIG_FB_S5P_SOFTBUTTON_UI
-		if (i == pdata->default_win || i == 4)
-#else
 		if (i == pdata->default_win)
-#endif	
 			if (s3cfb_map_default_video_memory(fbdev,
 						fbdev->fb[i], fimd_id)) {
 				dev_err(fbdev->dev,
@@ -893,6 +757,10 @@ int s3cfb_alloc_framebuffer(struct s3cfb_global *fbdev, int fimd_id)
 			ret = -ENOMEM;
 			goto err_alloc_fb;
 		}
+		sec_getlog_supply_fbinfo((void *)fbdev->fb[i]->fix.smem_start,
+					 fbdev->fb[i]->var.xres,
+					 fbdev->fb[i]->var.yres,
+					 fbdev->fb[i]->var.bits_per_pixel, 2);
 	}
 
 	return 0;
@@ -943,10 +811,18 @@ int s3cfb_release_window(struct fb_info *fb)
 	struct s3cfb_global *fbdev = get_fimd_global(win->id);
 	struct s3c_platform_fb *pdata = to_fb_plat(fbdev->dev);
 
+#ifdef CONFIG_EXYNOS_DEV_PD
+	if (unlikely(fbdev->system_state == POWER_OFF)) {
+		dev_err(fbdev->dev, "%s::system_state is POWER_OFF, fb%d\n", __func__, win->id);
+		return 0;
+	}
+#endif
 	if (win->id != pdata->default_win) {
 		s3cfb_disable_window(fbdev, win->id);
 		s3cfb_unmap_video_memory(fbdev, fb);
+#if !defined(CONFIG_CPU_EXYNOS4212) && !defined(CONFIG_CPU_EXYNOS4412)
 		s3cfb_set_buffer_address(fbdev, win->id);
+#endif
 	}
 
 	win->x = 0;
@@ -1176,16 +1052,36 @@ int s3cfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *fb)
 {
 	struct s3cfb_window *win = fb->par;
 	struct s3cfb_global *fbdev = get_fimd_global(win->id);
+	struct s3c_platform_fb *pdata = to_fb_plat(fbdev->dev);
+
+	if (win->id == pdata->default_win)
+		spin_lock(&fbdev->slock);
 
 #ifdef CONFIG_EXYNOS_DEV_PD
-	if (fbdev->system_state == POWER_OFF)
-		return 0;
+	if (unlikely(fbdev->system_state == POWER_OFF) || fbdev->regs == 0) {
+		dev_err(fbdev->dev, "%s::system_state is POWER_OFF, fb%d\n", __func__, win->id);
+		if (win->id == pdata->default_win)
+			spin_unlock(&fbdev->slock);
+		return -EINVAL;
+	}
 #endif
 
 	if (var->yoffset + var->yres > var->yres_virtual) {
 		dev_err(fbdev->dev, "invalid yoffset value\n");
+		if (win->id == pdata->default_win)
+			spin_unlock(&fbdev->slock);
 		return -EINVAL;
 	}
+
+#if defined(CONFIG_CPU_EXYNOS4210)
+	if (unlikely(var->xoffset + var->xres > var->xres_virtual)) {
+		dev_err(fbdev->dev, "invalid xoffset value\n");
+		if (win->id == pdata->default_win)
+			spin_unlock(&fbdev->slock);
+		return -EINVAL;
+	}
+	fb->var.xoffset = var->xoffset;
+#endif
 
 	fb->var.yoffset = var->yoffset;
 
@@ -1194,6 +1090,8 @@ int s3cfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *fb)
 
 	s3cfb_set_buffer_address(fbdev, win->id);
 
+	if (win->id == pdata->default_win)
+		spin_unlock(&fbdev->slock);
 	return 0;
 }
 
