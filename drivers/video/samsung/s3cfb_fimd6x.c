@@ -714,6 +714,19 @@ int s3cfb_set_alpha_value(struct s3cfb_global *ctrl, int value)
 	return 0;
 }
 
+int s3cfb_set_alpha_mode(struct s3cfb_global *ctrl, int id, unsigned int mode)
+{
+	if (id <= 0 || id > 5)
+		return 0;
+
+	if (mode == BLENDING_PREMULT)
+		writel(0xc1, ctrl->regs + S3C_BLENDEQ1 + 4 * (id - 1));
+	else
+		writel(0xc2, ctrl->regs + S3C_BLENDEQ1 + 4 * (id - 1));
+
+	return 0;
+}
+
 int s3cfb_set_alpha_value_width(struct s3cfb_global *ctrl, int id)
 {
 	struct fb_var_screeninfo *var = &ctrl->fb[id]->var;

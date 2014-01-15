@@ -133,6 +133,25 @@ int fb_is_primary_device(struct fb_info *fb)
 }
 #endif
 
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)\
+	|| defined(CONFIG_CPU_EXYNOS4210)
+int window_on_off_status(struct s3cfb_global *fbdev)
+{
+	struct s3c_platform_fb *pdata = to_fb_plat(fbdev->dev);
+	struct s3cfb_window *win;
+	int i;
+	int ret = 0;
+
+	for (i = 0; i < pdata->nr_wins; i++) {
+		win = fbdev->fb[i]->par;
+		if (win->enabled)
+			ret |= (1 << i);
+	}
+
+	return ret;
+}
+#endif
+
 int s3cfb_enable_window(struct s3cfb_global *fbdev, int id)
 {
 	struct s3cfb_window *win = fbdev->fb[id]->par;
@@ -774,7 +793,11 @@ int s3cfb_init_fbinfo(struct s3cfb_global *fbdev, int id)
 	fb->flags = FBINFO_FLAG_DEFAULT;
 	fb->pseudo_palette = &win->pseudo_pal;
 #if (CONFIG_FB_S5P_NR_BUFFERS != 1)
+#if defined(CONFIG_CPU_EXYNOS4210)
+	fix->xpanstep = 1; /*  xpanstep can be 1 if bits_per_pixel is 32 */
+#else
 	fix->xpanstep = 2;
+#endif
 	fix->ypanstep = 1;
 #else
 	fix->xpanstep = 0;
@@ -793,12 +816,13 @@ int s3cfb_init_fbinfo(struct s3cfb_global *fbdev, int id)
 	var->xres_virtual = var->xres;
 	var->yres_virtual = var->yres * CONFIG_FB_S5P_NR_BUFFERS;
 #endif
+
 	var->bits_per_pixel = 32;
 	var->xoffset = 0;
 	var->yoffset = 0;
-	var->width = 0;
-	var->height = 0;
-	var->transp.length = 0;
+	var->width = lcd->p_width;
+	var->height = lcd->p_height;
+	var->transp.length = 8;
 
 	fix->line_length = var->xres_virtual * var->bits_per_pixel / 8;
 	fix->smem_len = fix->line_length * var->yres_virtual;
@@ -981,12 +1005,15 @@ int s3cfb_blank(int blank_mode, struct fb_info *fb)
 	struct s3c_platform_fb *pdata = to_fb_plat(fbdev->dev);
 	int enabled_win = 0;
 	int i;
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412) || defined(CONFIG_CPU_EXYNOS4210)
+	int win_status;
+#endif
 
-	dev_dbg(fbdev->dev, "change blank mode\n");
+	dev_info(fbdev->dev, "change blank mode=%d, fb%d\n", blank_mode, win->id);
 
 #ifdef CONFIG_EXYNOS_DEV_PD
-	if (fbdev->system_state == POWER_OFF) {
-		dev_err(fbdev->dev, "system_state is POWER_OFF\n");
+	if (unlikely(fbdev->system_state == POWER_OFF)) {
+		dev_err(fbdev->dev, "%s::system_state is POWER_OFF, fb%d\n", __func__, win->id);
 		win->power_state = blank_mode;
 		if (win->id != pdata->default_win)
 			return NOT_DEFAULT_WINDOW;
@@ -1014,7 +1041,8 @@ int s3cfb_blank(int blank_mode, struct fb_info *fb)
 
 		enabled_win = atomic_read(&fbdev->enabled_win);
 		if (enabled_win == 0) {
-			pdata->clk_on(pdev, &fbdev->clock);
+			/* temporarily nonuse for recovery, will modify code */
+			/* pdata->clk_on(pdev, &fbdev->clock); */
 			s3cfb_init_global(fbdev);
 			s3cfb_set_clock(fbdev);
 				for (i = 0; i < pdata->nr_wins; i++) {
@@ -1040,7 +1068,13 @@ int s3cfb_blank(int blank_mode, struct fb_info *fb)
 			if (fbdev->lcd->init_ldi)
 				fbdev->lcd->init_ldi();
 		}
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)\
+	|| defined(CONFIG_CPU_EXYNOS4210)
+		win_status = window_on_off_status(fbdev);
+		if (win_status == 0)
+#else
 		if (win->id != pdata->default_win)
+#endif
 			return NOT_DEFAULT_WINDOW;
 
 		break;
@@ -1083,7 +1117,13 @@ int s3cfb_blank(int blank_mode, struct fb_info *fb)
 			if (fbdev->lcd->init_ldi)
 				fbdev->lcd->init_ldi();
 		}
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)\
+	|| defined(CONFIG_CPU_EXYNOS4210)
+		win_status = window_on_off_status(fbdev);
+		if (win_status == 0)
+#else
 		if (win->id != pdata->default_win)
+#endif
 			return NOT_DEFAULT_WINDOW;
 
 		break;
@@ -1107,12 +1147,18 @@ int s3cfb_blank(int blank_mode, struct fb_info *fb)
 				fbdev->lcd->deinit_ldi();
 			if (pdata->lcd_off)
 				pdata->lcd_off(pdev);
-			s3cfb_display_off(fbdev);
-			pdata->clk_off(pdev, &fbdev->clock);
+			/* temporaily nonuse for recovery , will modify code */
+			/* s3cfb_display_off(fbdev);
+			pdata->clk_off(pdev, &fbdev->clock); */
 		}
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)\
+	|| defined(CONFIG_CPU_EXYNOS4210)
+		win_status = window_on_off_status(fbdev);
+		if (win_status != 0)
+#else
 		if (win->id != pdata->default_win)
+#endif
 			return NOT_DEFAULT_WINDOW;
-
 		break;
 
 	case FB_BLANK_VSYNC_SUSPEND:	/* fall through */
@@ -1124,6 +1170,7 @@ int s3cfb_blank(int blank_mode, struct fb_info *fb)
 
 	return 0;
 }
+
 
 int s3cfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *fb)
 {
@@ -1168,6 +1215,306 @@ int s3cfb_wait_for_vsync(struct s3cfb_global *fbdev)
 	return 0;
 }
 #endif
+
+static int s3c_fb_align_word(unsigned int bpp, unsigned int pix)
+{
+	int pix_per_word;
+
+	if (bpp > 16)
+		return pix;
+
+	pix_per_word = (8 * 32) / bpp;
+	return ALIGN(pix, pix_per_word);
+}
+
+static u32 s3c_fb_red_length(int format)
+{
+	switch (format) {
+	case S3C_FB_PIXEL_FORMAT_RGBA_8888:
+	case S3C_FB_PIXEL_FORMAT_RGBX_8888:
+	case S3C_FB_PIXEL_FORMAT_RGB_888:
+	case S3C_FB_PIXEL_FORMAT_BGRA_8888:
+		return 8;
+
+	case S3C_FB_PIXEL_FORMAT_RGB_565:
+	case S3C_FB_PIXEL_FORMAT_RGBA_5551:
+		return 5;
+
+	case S3C_FB_PIXEL_FORMAT_RGBA_4444:
+		return 4;
+
+	default:
+		pr_warn("s3c-fb: unrecognized pixel format %u\n", format);
+		return 0;
+	}
+}
+
+static u32 s3c_fb_red_offset(int format)
+{
+	switch (format) {
+	case S3C_FB_PIXEL_FORMAT_RGBA_8888:
+	case S3C_FB_PIXEL_FORMAT_RGBX_8888:
+	case S3C_FB_PIXEL_FORMAT_RGB_888:
+	case S3C_FB_PIXEL_FORMAT_RGB_565:
+	case S3C_FB_PIXEL_FORMAT_RGBA_5551:
+	case S3C_FB_PIXEL_FORMAT_RGBA_4444:
+		return 0;
+
+	case S3C_FB_PIXEL_FORMAT_BGRA_8888:
+		return 16;
+
+	default:
+		pr_warn("s3c-fb: unrecognized pixel format %u\n", format);
+		return 0;
+	}
+}
+
+static u32 s3c_fb_green_length(int format)
+{
+	if (format == S3C_FB_PIXEL_FORMAT_RGB_565)
+		return 6;
+
+	return s3c_fb_red_length(format);
+}
+
+static u32 s3c_fb_green_offset(int format)
+{
+	switch (format) {
+	case S3C_FB_PIXEL_FORMAT_RGBA_8888:
+	case S3C_FB_PIXEL_FORMAT_RGB_888:
+	case S3C_FB_PIXEL_FORMAT_BGRA_8888:
+	case S3C_FB_PIXEL_FORMAT_RGBX_8888:
+		return 8;
+
+	case S3C_FB_PIXEL_FORMAT_RGB_565:
+	case S3C_FB_PIXEL_FORMAT_RGBA_5551:
+		return 5;
+
+	case S3C_FB_PIXEL_FORMAT_RGBA_4444:
+		return 4;
+
+	default:
+		pr_warn("s3c-fb: unrecognized pixel format %u\n", format);
+		return 0;
+	}
+}
+
+static u32 s3c_fb_blue_length(int format)
+{
+	return s3c_fb_red_length(format);
+}
+
+static u32 s3c_fb_blue_offset(int format)
+{
+	switch (format) {
+	case S3C_FB_PIXEL_FORMAT_RGBA_8888:
+	case S3C_FB_PIXEL_FORMAT_RGB_888:
+	case S3C_FB_PIXEL_FORMAT_RGBX_8888:
+		return 16;
+
+	case S3C_FB_PIXEL_FORMAT_RGB_565:
+		return 11;
+
+	case S3C_FB_PIXEL_FORMAT_RGBA_5551:
+		return 10;
+
+	case S3C_FB_PIXEL_FORMAT_RGBA_4444:
+		return 8;
+
+	case S3C_FB_PIXEL_FORMAT_BGRA_8888:
+		return 0;
+
+	default:
+		pr_warn("s3c-fb: unrecognized pixel format %u\n", format);
+		return 0;
+	}
+}
+
+static u32 s3c_fb_transp_length(int format)
+{
+	switch (format) {
+	case S3C_FB_PIXEL_FORMAT_RGBA_8888:
+	case S3C_FB_PIXEL_FORMAT_BGRA_8888:
+		return 8;
+
+	case S3C_FB_PIXEL_FORMAT_RGBA_5551:
+		return 1;
+
+	case S3C_FB_PIXEL_FORMAT_RGBA_4444:
+		return 4;
+
+	case S3C_FB_PIXEL_FORMAT_RGB_888:
+	case S3C_FB_PIXEL_FORMAT_RGB_565:
+	case S3C_FB_PIXEL_FORMAT_RGBX_8888:
+		return 0;
+
+	default:
+		pr_warn("s3c-fb: unrecognized pixel format %u\n", format);
+		return 0;
+	}
+}
+
+static u32 s3c_fb_transp_offset(int format)
+{
+	switch (format) {
+	case S3C_FB_PIXEL_FORMAT_RGBA_8888:
+	case S3C_FB_PIXEL_FORMAT_BGRA_8888:
+		return 24;
+
+	case S3C_FB_PIXEL_FORMAT_RGBA_5551:
+		return 15;
+
+	case S3C_FB_PIXEL_FORMAT_RGBA_4444:
+		return 12;
+
+	case S3C_FB_PIXEL_FORMAT_RGB_888:
+	case S3C_FB_PIXEL_FORMAT_RGB_565:
+	case S3C_FB_PIXEL_FORMAT_RGBX_8888:
+		return s3c_fb_blue_offset(format);
+
+	default:
+		pr_warn("s3c-fb: unrecognized pixel format %u\n", format);
+		return 0;
+	}
+}
+
+static u32 s3c_fb_padding(int format)
+{
+	switch (format) {
+	case S3C_FB_PIXEL_FORMAT_RGBX_8888:
+		return 8;
+
+	case S3C_FB_PIXEL_FORMAT_RGB_565:
+	case S3C_FB_PIXEL_FORMAT_RGBA_8888:
+	case S3C_FB_PIXEL_FORMAT_RGBA_5551:
+	case S3C_FB_PIXEL_FORMAT_RGBA_4444:
+		return 0;
+
+	default:
+		pr_warn("s3c-fb: unrecognized pixel format %u\n", format);
+		return 0;
+	}
+
+}
+
+static inline u32 fb_visual(u32 bits_per_pixel, unsigned short palette_sz)
+{
+	switch (bits_per_pixel) {
+	case 32:
+	case 24:
+	case 16:
+	case 12:
+		return FB_VISUAL_TRUECOLOR;
+	case 8:
+		if (palette_sz >= 256)
+			return FB_VISUAL_PSEUDOCOLOR;
+		else
+			return FB_VISUAL_TRUECOLOR;
+	case 1:
+		return FB_VISUAL_MONO01;
+	default:
+		return FB_VISUAL_PSEUDOCOLOR;
+	}
+}
+
+
+static inline u32 fb_linelength(u32 xres_virtual, u32 bits_per_pixel)
+{
+	return (xres_virtual * bits_per_pixel) / 8;
+}
+
+static inline u16 fb_panstep(u32 res, u32 res_virtual)
+{
+	return res_virtual > res ? 1 : 0;
+}
+
+static inline u32 vidw_buf_size(u32 xres, u32 line_length, u32 bits_per_pixel)
+{
+	u32 pagewidth = (xres * bits_per_pixel) >> 3;
+	return VIDW_BUF_SIZE_OFFSET(line_length - pagewidth) |
+	       VIDW_BUF_SIZE_PAGEWIDTH(pagewidth) |
+	       VIDW_BUF_SIZE_OFFSET_E(line_length - pagewidth) |
+	       VIDW_BUF_SIZE_PAGEWIDTH_E(pagewidth);
+}
+
+inline u32 vidosd_a(int x, int y)
+{
+	return VIDOSDxA_TOPLEFT_X(x) |
+			VIDOSDxA_TOPLEFT_Y(y) |
+			VIDOSDxA_TOPLEFT_X_E(x) |
+			VIDOSDxA_TOPLEFT_Y_E(y);
+}
+
+inline u32 vidosd_b(int x, int y, u32 xres, u32 yres, u32 bits_per_pixel)
+{
+	return VIDOSDxB_BOTRIGHT_X(s3c_fb_align_word(bits_per_pixel,
+			x + xres - 1)) |
+		VIDOSDxB_BOTRIGHT_Y(y + yres - 1) |
+		VIDOSDxB_BOTRIGHT_X_E(s3c_fb_align_word(bits_per_pixel,
+			x + xres - 1)) |
+		VIDOSDxB_BOTRIGHT_Y_E(y + yres - 1);
+}
+
+static inline u32 wincon(u32 bits_per_pixel, u32 transp_length, u32 red_length)
+{
+	u32 data = 0;
+
+	switch (bits_per_pixel) {
+	case 1:
+		data |= WINCON0_BPPMODE_1BPP;
+		data |= WINCONx_BITSWP;
+		data |= WINCONx_BURSTLEN_4WORD;
+		break;
+	case 2:
+		data |= WINCON0_BPPMODE_2BPP;
+		data |= WINCONx_BITSWP;
+		data |= WINCONx_BURSTLEN_8WORD;
+		break;
+	case 4:
+		data |= WINCON0_BPPMODE_4BPP;
+		data |= WINCONx_BITSWP;
+		data |= WINCONx_BURSTLEN_8WORD;
+		break;
+	case 8:
+		if (transp_length != 0)
+			data |= WINCON1_BPPMODE_8BPP_1232;
+		else
+			data |= WINCON0_BPPMODE_8BPP_PALETTE;
+		data |= WINCONx_BURSTLEN_8WORD;
+		data |= WINCONx_BYTSWP;
+		break;
+	case 16:
+		if (transp_length != 0)
+			data |= WINCON1_BPPMODE_16BPP_A1555;
+		else
+			data |= WINCON0_BPPMODE_16BPP_565;
+		data |= WINCONx_HAWSWP;
+		data |= WINCONx_BURSTLEN_16WORD;
+		break;
+	case 24:
+	case 32:
+		if (red_length == 6) {
+			if (transp_length != 0)
+				data |= WINCON1_BPPMODE_19BPP_A1666;
+			else
+				data |= WINCON1_BPPMODE_18BPP_666;
+		} else if (transp_length == 1)
+			data |= WINCON1_BPPMODE_25BPP_A1888
+				| WINCON1_BLD_PIX;
+		else if ((transp_length == 4) ||
+			(transp_length == 8))
+			data |= WINCON1_BPPMODE_28BPP_A4888
+				| WINCON1_BLD_PIX | WINCON1_ALPHA_SEL;
+		else
+			data |= WINCON0_BPPMODE_24BPP_888;
+
+		data |= WINCONx_WSWP;
+		data |= WINCONx_BURSTLEN_16WORD;
+		break;
+	}
+
+	return data;
+}
 
 void s3c_fb_update_regs(struct s3cfb_global *fbdev, struct s3c_reg_data *regs)
 {
@@ -1297,14 +1644,196 @@ void s3c_fb_update_regs(struct s3cfb_global *fbdev, struct s3c_reg_data *regs)
 #endif
 }
 
+static int s3c_fb_set_win_buffer(struct s3cfb_global *fbdev,
+		struct fb_info *fb, struct s3c_fb_win_config *win_config,
+		struct s3c_reg_data *regs)
+{
+	struct s3cfb_window *win = fb->par;
+	struct fb_fix_screeninfo prev_fix = fb->fix;
+	struct fb_var_screeninfo prev_var = fb->var;
+	unsigned short win_no = win->id;
+	int ret;
+	size_t window_size;
+	u32 alpha, size;
+
+	if (win_config->format >= S3C_FB_PIXEL_FORMAT_MAX) {
+		dev_err(fbdev->dev, "unknown pixel format %u\n",
+				win_config->format);
+		return -EINVAL;
+	}
+
+	fb->var.red.length = s3c_fb_red_length(win_config->format);
+	fb->var.red.offset = s3c_fb_red_offset(win_config->format);
+	fb->var.green.length = s3c_fb_green_length(win_config->format);
+	fb->var.green.offset = s3c_fb_green_offset(win_config->format);
+	fb->var.blue.length = s3c_fb_blue_length(win_config->format);
+	fb->var.blue.offset = s3c_fb_blue_offset(win_config->format);
+	fb->var.transp.length = s3c_fb_transp_length(win_config->format);
+	fb->var.transp.offset = s3c_fb_transp_offset(win_config->format);
+	fb->var.bits_per_pixel = fb->var.red.length +
+			fb->var.green.length +
+			fb->var.blue.length +
+			fb->var.transp.length +
+			s3c_fb_padding(win_config->format);
+
+	window_size = win_config->stride * win_config->h;
+
+	if (win_config->phys_addr != 0)
+		fb->fix.smem_start = win_config->phys_addr + win_config->offset;
+	else
+		fb->fix.smem_start = win_config->virt_addr + win_config->offset;
+	fb->fix.smem_len = window_size;
+	fb->var.xres = win_config->w;
+	fb->var.xres_virtual = win_config->stride * 8 /
+			fb->var.bits_per_pixel;
+	fb->var.yres = fb->var.yres_virtual = win_config->h;
+	fb->var.xoffset = win_config->offset % win_config->stride;
+	fb->var.yoffset = win_config->offset / win_config->stride;
+
+	fb->fix.visual = fb_visual(fb->var.bits_per_pixel, 256);
+	fb->fix.line_length = win_config->stride;
+	fb->fix.xpanstep = fb_panstep(win_config->w,
+			fb->var.xres_virtual);
+	fb->fix.ypanstep = fb_panstep(win_config->h, win_config->h);
+
+#ifdef CONFIG_FB_S5P_SYSMMU
+	if ((fbdev->sysmmu.enabled == false) &&
+			(current->mm))
+		fbdev->sysmmu.pgd = (unsigned int)current->mm->pgd;
+#endif
+
+#ifdef CONFIG_FB_S5P_SYSMMU
+	if (win_config->phys_addr != 0)
+		regs->vidw_buf_start[win_no] = (u32)phys_to_virt(fb->fix.smem_start);
+	else
+#endif
+		regs->vidw_buf_start[win_no] = fb->fix.smem_start;
+
+	regs->vidw_buf_end[win_no] = regs->vidw_buf_start[win_no] +
+			window_size;
+
+	regs->vidw_buf_size[win_no] = vidw_buf_size(win_config->w,
+			fb->fix.line_length,
+			fb->var.bits_per_pixel);
+
+#ifdef CONFIG_FB_S5P_SYSMMU
+	if ((fb->fix.smem_start) &&
+			(fb->fix.smem_start != fbdev->sysmmu.default_fb_addr))
+		s3cfb_clean_outer_pagetable(regs->vidw_buf_start[win_no],
+				regs->vidw_buf_end[win_no] - regs->vidw_buf_start[win_no]);
+#endif
+
+
+	regs->vidosd_a[win_no] = vidosd_a(win_config->x, win_config->y);
+	regs->vidosd_b[win_no] = vidosd_b(win_config->x, win_config->y,
+			win_config->w, win_config->h,
+			fb->var.bits_per_pixel);
+
+	alpha = VIDISD14C_ALPHA1_R(0xf) |
+		VIDISD14C_ALPHA1_G(0xf) |
+		VIDISD14C_ALPHA1_B(0xf);
+	regs->vidosd_c[win_no] = alpha;
+
+	if (win_no <= 2) {
+		size = win_config->w * win_config->h;
+		regs->vidosd_d[win_no] = size;
+	}
+
+	regs->shadowcon |= SHADOWCON_CHx_ENABLE(win_no);
+
+	regs->wincon[win_no] = wincon(fb->var.bits_per_pixel,
+			fb->var.transp.length,
+			fb->var.red.length);
+
+	return 0;
+}
+
+static int s3c_fb_set_win_config(struct s3cfb_global *fbdev,
+		struct s3c_fb_win_config_data *win_data)
+{
+	struct fb_info *fb;
+	struct s3c_platform_fb *pdata = to_fb_plat(fbdev->dev);
+	struct s3c_fb_win_config *win_config = win_data->config;
+	int ret = 0;
+	unsigned short i;
+	struct s3c_reg_data *regs = kzalloc(sizeof(struct s3c_reg_data),
+			GFP_KERNEL);
+	struct sync_fence *fence;
+	struct sync_pt *pt;
+	int fd;
+
+	if (!regs) {
+		dev_err(fbdev->dev, "could not allocate s3c_reg_data");
+		return -ENOMEM;
+	}
+
+	fd = get_unused_fd();
+
+	for (i = 0; i < pdata->nr_wins && !ret; i++) {
+		struct s3c_fb_win_config *config = &win_config[i];
+		bool enabled = 0;
+		u32 color_map = WINxMAP_MAP | WINxMAP_MAP_COLOUR(0);
+
+		fb = fbdev->fb[i];
+
+		switch (config->state) {
+		case S3C_FB_WIN_STATE_DISABLED:
+			break;
+		case S3C_FB_WIN_STATE_COLOR:
+			enabled = 1;
+			color_map |= WINxMAP_MAP_COLOUR(config->color);
+			break;
+		case S3C_FB_WIN_STATE_BUFFER:
+			ret = s3c_fb_set_win_buffer(fbdev, fb, config, regs);
+			if (!ret) {
+				enabled = 1;
+				color_map = 0;
+			}
+			break;
+		default:
+			dev_warn(fbdev->dev, "unrecognized window state %u",
+					config->state);
+			ret = -EINVAL;
+			break;
+		}
+
+		if (enabled)
+			regs->wincon[i] |= WINCONx_ENWIN;
+		else
+			regs->wincon[i] &= ~WINCONx_ENWIN;
+		regs->winmap[i] = color_map;
+	}
+
+	if (ret) {
+		put_unused_fd(fd);
+		kfree(regs);
+	} else {
+		mutex_lock(&fbdev->update_regs_list_lock);
+		fbdev->timeline_max++;
+		pt = sw_sync_pt_create(fbdev->timeline, fbdev->timeline_max);
+		fence = sync_fence_create("display", pt);
+		sync_fence_install(fence, fd);
+		win_data->fence = fd;
+
+		list_add_tail(&regs->list, &fbdev->update_regs_list);
+		mutex_unlock(&fbdev->update_regs_list_lock);
+		queue_kthread_work(&fbdev->update_regs_worker, &fbdev->update_regs_work);
+	}
+
+	return ret;
+}
+
 int s3cfb_ioctl(struct fb_info *fb, unsigned int cmd, unsigned long arg)
 {
 	struct fb_var_screeninfo *var = &fb->var;
 	struct s3cfb_window *win = fb->par;
 	struct s3cfb_global *fbdev = get_fimd_global(win->id);
 	struct s3cfb_lcd *lcd = fbdev->lcd;
+	void *argp = (void *)arg;
 	int ret = 0;
-
+#if defined(CONFIG_CPU_EXYNOS4210)
+	unsigned int addr = 0;
+#endif
 	dma_addr_t start_addr = 0;
 	struct fb_fix_screeninfo *fix = &fb->fix;
 
@@ -1312,15 +1841,24 @@ int s3cfb_ioctl(struct fb_info *fb, unsigned int cmd, unsigned long arg)
 		struct s3cfb_user_window user_window;
 		struct s3cfb_user_plane_alpha user_alpha;
 		struct s3cfb_user_chroma user_chroma;
+		struct s3c_fb_win_config_data win_data;
 		int vsync;
+		unsigned int alpha_mode;
 	} p;
 
 #ifdef CONFIG_EXYNOS_DEV_PD
-	if (fbdev->system_state == POWER_OFF)
-		return 0;
+	if (unlikely(fbdev->system_state == POWER_OFF)) {
+		dev_err(fbdev->dev, "%s::system_state is POWER_OFF cmd is 0x%08x, fb%d\n", __func__, cmd, win->id);
+		return -EFAULT;
+	}
 #endif
 
 	switch (cmd) {
+	case S3CFB_SET_WIN_ADDR:
+		fix->smem_start = (unsigned long)argp;
+		s3cfb_set_buffer_address(fbdev, win->id);
+		break;
+
 	case FBIO_WAITFORVSYNC:
 		if (fbdev->regs == 0)
 			return 0;
@@ -1358,6 +1896,10 @@ int s3cfb_ioctl(struct fb_info *fb, unsigned int cmd, unsigned long arg)
 				   sizeof(p.user_window)))
 			ret = -EFAULT;
 		else {
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+			win->x = p.user_window.x;
+			win->y = p.user_window.y;
+#else
 			if (p.user_window.x < 0)
 				p.user_window.x = 0;
 
@@ -1375,6 +1917,7 @@ int s3cfb_ioctl(struct fb_info *fb, unsigned int cmd, unsigned long arg)
 				win->y = p.user_window.y;
 
 			s3cfb_set_window_position(fbdev, win->id);
+#endif
 		}
 		break;
 
@@ -1413,8 +1956,16 @@ int s3cfb_ioctl(struct fb_info *fb, unsigned int cmd, unsigned long arg)
 		if (get_user(p.vsync, (int __user *)arg))
 			ret = -EFAULT;
 		else {
+#ifdef CONFIG_CPU_EXYNOS4412
+			if (!fbdev->regs)
+				return ret;
+#endif
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+			ret = s3cfb_set_vsync_int(fb, p.vsync);
+#else
 			s3cfb_set_global_interrupt(fbdev, p.vsync);
 			s3cfb_set_vsync_interrupt(fbdev, p.vsync);
+#endif
 		}
 		break;
 
@@ -1431,11 +1982,69 @@ int s3cfb_ioctl(struct fb_info *fb, unsigned int cmd, unsigned long arg)
 		}
 
 		break;
+
+	case S3CFB_GET_CUR_WIN_BUF_ADDR:
+		start_addr = s3cfb_get_win_cur_buf_addr(fbdev, win->id);
+		dev_dbg(fbdev->dev, "win_cur_buf_addr: 0x%08x\n", start_addr);
+		if (copy_to_user((void *)arg, &start_addr, sizeof(unsigned int))) {
+			dev_err(fbdev->dev, "copy_to_user error\n");
+			return -EFAULT;
+		}
+		break;
+
+#if defined(CONFIG_CPU_EXYNOS4210)
+	case S3CFB_SET_WIN_MEM_START:
+		if (copy_from_user(&addr, (unsigned int *)arg, sizeof(unsigned int)))
+			ret = -EFAULT;
+		else {
+			fix->smem_start = (unsigned long)addr;
+			printk("\n\n######smem_start %x \n\n", (unsigned int)fix->smem_start);
+		}
+		break;
+#endif
+
+	case S3CFB_SET_WIN_ON:
+		s3cfb_enable_window(fbdev, win->id);
+		break;
+
+	case S3CFB_SET_WIN_OFF:
+		s3cfb_disable_window(fbdev, win->id);
+		break;
+
+	case S3CFB_SET_ALPHA_MODE:
+		if (copy_from_user(&p.alpha_mode,
+				   (struct s3cfb_user_window __user *)arg,
+				   sizeof(p.alpha_mode)))
+			ret = -EFAULT;
+		else
+			s3cfb_set_alpha_mode(fbdev, win->id, p.alpha_mode);
+		break;
+
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+	case S3CFB_WIN_CONFIG:
+		if (copy_from_user(&p.win_data,
+				   (struct s3c_fb_win_config_data __user *)arg,
+				   sizeof(p.win_data))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		ret = s3c_fb_set_win_config(fbdev, &p.win_data);
+		if (ret)
+			break;
+
+		if (copy_to_user((struct s3c_fb_win_config_data __user *)arg,
+				 &p.win_data,
+				 sizeof(p.win_data))) {
+			ret = -EFAULT;
+			break;
+		}
+		break;
+#endif
 	}
 
 	return ret;
 }
-
 int s3cfb_enable_localpath(struct s3cfb_global *fbdev, int id)
 {
 	struct s3cfb_window *win = fbdev->fb[id]->par;
