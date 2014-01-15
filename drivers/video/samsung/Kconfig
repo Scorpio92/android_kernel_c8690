@@ -7,6 +7,9 @@ config FB_S5P
 	select FB_CFB_FILLRECT
 	select FB_CFB_COPYAREA
 	select FB_CFB_IMAGEBLIT
+	select SYNC
+	select SW_SYNC
+	select SW_SYNC_USER
 	depends on FB && (ARCH_S5PV210 || ARCH_EXYNOS4) && !FB_S3C
 	default n
 	help
@@ -135,6 +138,7 @@ config FB_S5P_WA101S
 	select TOUCHSCREEN_S5PV310_MT
 	help
 	  This enables support for 10.1" 1366*768 LCD panel
+
 config FB_S5P_SOFTBUTTON_UI
     bool "SOFTBUTTON_UI"
     depends on (FB_S5P_WA101S && TC4_GB)
@@ -186,6 +190,10 @@ config LCD_BL_ATT1403
 config KERNEL_LOGO
 	bool "kernel bootup logo"
 	default n
+
+config LCD_FREQ_SWITCH
+       bool "support for LCD Frequency switch"
+       default n
 
 config FB_S5P_V2
 	tristate "S5P Framebuffer version 2 support"
