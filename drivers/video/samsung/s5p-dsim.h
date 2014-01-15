@@ -50,6 +50,14 @@ struct mipi_lcd_driver {
 	int	(*is_panel_on)(void);
 };
 
+struct dsim_ops {
+	u8	(*cmd_write)(void *ptr, u32 data0, u32 data1, u32 data2);
+	int	(*cmd_read)(void *ptr, u8 addr, u16 count, u8 *buf);
+	int	(*cmd_dcs_read)(void *ptr, u8 addr, u16 count, u8 *buf);
+	void	(*suspend)(void);
+	void	(*resume)(void);
+};
+
 int s5p_dsim_register_lcd_driver(struct mipi_lcd_driver *lcd_drv);
 
 #endif /* _S5P_DSIM_LOWLEVEL_H */

@@ -919,6 +919,13 @@ void s3cfb_early_suspend(struct early_suspend *h)
 		if (pdata->clk_off)
 			pdata->clk_off(pdev, &fbdev[i]->clock);
 	}
+
+/*
+#ifdef CONFIG_FB_S5P_MIPI_DSIM
+	s5p_dsim_early_suspend();
+#endif
+*/
+
 #ifdef CONFIG_EXYNOS_DEV_PD
 
 	/* disable the power domain */
@@ -943,14 +950,6 @@ void s3cfb_early_suspend(struct early_suspend *h)
 	regulator_force_disable(lcd_regulator); 	//yulu
 	regulator_disable(lcd_regulator_ldo13); 	//jacob
 
-#endif
-
-#ifdef CONFIG_FB_S5P_SYSMMU
-	if (fbdev[0]->sysmmu.enabled == true) {
-		fbdev[0]->sysmmu.enabled = false;
-		fbdev[0]->sysmmu.pgd = 0;
-		s5p_sysmmu_disable(fbdev[0]->dev);
-	}
 #endif
 
 	printk(KERN_INFO "-%s\n", __func__);
