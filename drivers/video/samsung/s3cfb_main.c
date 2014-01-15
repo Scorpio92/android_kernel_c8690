@@ -70,7 +70,7 @@ struct regulator *lcd_regulator = NULL;	//yulu
 struct regulator *lcd_regulator_ldo13 = NULL;//jacob
 extern int s5p_dsim_frame_done_interrupt_enable(u8 enable);
 
-inline struct s3cfb_global *get_fimd_global(int id)
+struct s3cfb_global *get_fimd_global(int id)
 {
 	struct s3cfb_global *fbdev;
 
@@ -873,6 +873,11 @@ void s3cfb_early_suspend(struct early_suspend *h)
 	int i, ret;
 
 	printk(KERN_INFO "+%s\n", __func__);
+
+#ifdef CONFIG_FB_S5P_MIPI_DSIM
+	if (lcd_early_suspend)
+		lcd_early_suspend();
+#endif
 
 	for (i = 0; i < FIMD_MAX; i++) {
 		fbdev[i] = fbfimd->fbdev[i];
