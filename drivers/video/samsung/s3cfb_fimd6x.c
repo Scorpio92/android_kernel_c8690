@@ -41,7 +41,14 @@ void s3cfb_check_line_count(struct s3cfb_global *ctrl)
 
 int s3cfb_check_vsync_status(struct s3cfb_global *ctrl)
 {
-	u32 cfg = (readl(ctrl->regs + S3C_VIDCON1) & S3C_VIDCON1_VSTATUS_MASK);
+	u32 cfg;
+
+	if (unlikely(!ctrl->regs)) {
+		dev_err(ctrl->dev, "reg is zero\n");
+		return 0;
+	}
+
+	cfg = (readl(ctrl->regs + S3C_VIDCON1) & S3C_VIDCON1_VSTATUS_MASK);
 
 	if (cfg != S3C_VIDCON1_VSTATUS_ACTIVE && cfg != S3C_VIDCON1_VSTATUS_BACK)
 		return 1;
@@ -240,7 +247,7 @@ int s3cfb_set_polarity(struct s3cfb_global *ctrl)
 
 	/* Set VCLK hold scheme */
 	cfg &= S3C_VIDCON1_FIXVCLK_MASK;
-	cfg |= S3C_VIDCON1_FIXVCLK_VCLK_RUN;
+	cfg |= S3C_VIDCON1_FIXVCLK_VCLK_RUN_VDEN_DIS;
 
 	if (pol->rise_vclk)
 		cfg |= S3C_VIDCON1_IVCLK_RISING_EDGE;
@@ -262,10 +269,9 @@ int s3cfb_set_polarity(struct s3cfb_global *ctrl)
 int s3cfb_set_polarity_only(struct s3cfb_global *ctrl)
 {
 	struct s3cfb_lcd_polarity *pol;
-	u32 cfg;
+	u32 cfg = 0;
 
 	pol = &ctrl->lcd->polarity;
-    cfg = 0;
 
 	if (pol->rise_vclk)
 		cfg |= S3C_VIDCON1_IVCLK_RISING_EDGE;

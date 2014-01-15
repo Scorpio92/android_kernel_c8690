@@ -190,13 +190,13 @@ struct s3cfb_global {
 	void __iomem		*ielcd_regs;
 	void			*data;
 	struct mutex		lock;
-	struct device		*dev;
-	struct clk		*clock;
 	spinlock_t		slock;
+	struct device		*dev;
 #ifdef CONFIG_BUSFREQ_OPP
 	struct device           *bus_dev;
 #endif
 	spinlock_t		vsync_slock;
+	struct clk		*clock;
 	int			irq;
 	wait_queue_head_t	wq;
 	unsigned int		wq_count;
@@ -207,7 +207,8 @@ struct s3cfb_global {
 	enum s3cfb_output_t	output;
 	enum s3cfb_rgb_mode_t	rgb_mode;
 	struct s3cfb_lcd	*lcd;
-	int 			system_state;
+	int			system_state;
+
         /* New added */
 	struct list_head	update_regs_list;
 	struct mutex		update_regs_list_lock;
@@ -353,7 +354,7 @@ struct s3c_reg_data {
 #define S3CFB_SET_ALPHA_MODE		_IOW('F', 313, unsigned int)
 
 extern struct fb_ops			s3cfb_ops;
-extern inline struct s3cfb_global	*get_fimd_global(int id);
+extern struct s3cfb_global	*get_fimd_global(int id);
 
 /* S3CFB */
 extern struct s3c_platform_fb *to_fb_plat(struct device *dev);
