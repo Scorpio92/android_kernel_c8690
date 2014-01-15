@@ -169,3 +169,5 @@ obj-$(CONFIG_VIDEO_OUTPUT_CONTROL) += output.o
 ifeq ($(CONFIG_VITHAR),y)
     EXTRA_CFLAGS += -Idrivers/gpu/vithar
 endif
+
+obj-$(CONFIG_FB_S5P_EXTDSP)       += samsung_extdisp/
