@@ -287,6 +287,10 @@ int s3cfb_unmap_video_memory(struct s3cfb_global *fbdev, struct fb_info *fb)
 	int err;
 #endif
 
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+	return 0;
+#endif
+
 	if (fix->smem_start) {
 #ifdef CONFIG_CMA
 		err = cma_info(&mem_info, fbdev->dev, 0);
