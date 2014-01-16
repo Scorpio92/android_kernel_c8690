@@ -14,11 +14,21 @@
 /* IOCTL commands */
 #define EXYNOS_MEM_SET_CACHEABLE	_IOW('M', 200, bool)
 #define EXYNOS_MEM_PADDR_CACHE_FLUSH	_IOW('M', 201, struct exynos_mem_flush_range)
+#define EXYNOS_MEM_SET_PHYADDR		_IOW('M', 202, unsigned int)
 #define EXYNOS_MEM_PADDR_CACHE_CLEAN	_IOW('M', 203, struct exynos_mem_flush_range)
 
 struct exynos_mem_flush_range {
 	phys_addr_t	start;
 	size_t		length;
 };
+
+#define CMA_REGION_COUNT (12)
+struct simple_cma_descriptor {
+	const char 	*name;
+	int		start;
+	int		size;
+};
+
+extern void cma_region_descriptor_add(const char *name, int start, int size);
 
 #endif /* __INCLUDE_EXYNOS_MEM_H */
