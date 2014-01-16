@@ -9,15 +9,15 @@ config VIDEO_MFC5X
 	  This is a Samsung Multi Format Codecs (MFC) FIMV V5.x
 
 config VIDEO_MFC_MAX_INSTANCE
-	int "Maximum size of MFC instance (1-4)"
-	range 1 4
+	int "Maximum size of MFC instance (1-8)"
+	range 1 8
 	depends on VIDEO_MFC5X
 	default 4
 
 config VIDEO_MFC_MEM_PORT_COUNT
 	int "Default number of MFC memory ports (1-2)"
 	range 1 2
-	depends on VIDEO_MFC5X && (!EXYNOS4_CONTENT_PATH_PROTECTION)
+	depends on VIDEO_MFC5X && (!EXYNOS_CONTENT_PATH_PROTECTION)
 	default 2
 
 config VIDEO_MFC_VCM_UMP
@@ -29,3 +29,17 @@ config VIDEO_MFC5X_DEBUG
 	bool "MFC driver debug message"
 	depends on VIDEO_MFC5X
 	default n
+
+config VIDEO_MFC5X_DEC_CHROMA_LUMA_4K_ALIGN
+	bool "4k align for chroma and luma size in dec"
+	depends on VIDEO_MFC5X && SLP
+	---help---
+	  To use physical address on the gem interface.
+
+config USE_MFC_CMA
+	bool "Use CMA for MFC_SECURE region (EXPERIMENTAL)"
+	depends on DMA_CMA
+	default n
+	help
+	  This enables the Contiguous Memory Allocator for MFC SECURE region.
+	  If unsure, say "n".
