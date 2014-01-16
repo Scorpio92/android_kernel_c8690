@@ -21,14 +21,11 @@ obj-y				+= reset.o
 obj-y				+= reserve_mem.o
 obj-$(CONFIG_S5P_EXT_INT)	+= irq-eint.o
 obj-$(CONFIG_S5P_GPIO_INT)	+= irq-gpioint.o
+obj-$(CONFIG_S5P_SYSTEM_MMU)	+= s5p-sysmmu.o
 
-ifeq ($(CONFIG_TC4_ICS),y)
-obj-$(CONFIG_S5P_SYSTEM_MMU)	+= sysmmu.o
-obj-$(CONFIG_IOMMU_API)		+= s5p_iommu.o
-endif
-
-ifeq ($(CONFIG_TC4_GB),y)
-obj-$(CONFIG_S5P_SYSTEM_MMU)	+= sysmmu4gb.o
+ifeq ($(CONFIG_ARCH_EXYNOS4), y)
+obj-$(CONFIG_IOMMU_EXYNOS4_API)		+= s5p_iommu.o
+obj-$(CONFIG_IOVMM)		+= s5p_iovmm.o
 endif
 
 obj-$(CONFIG_PM)		+= pm.o

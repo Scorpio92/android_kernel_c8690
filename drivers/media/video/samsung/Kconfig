@@ -13,17 +13,16 @@ config VIDEO_SAMSUNG_V4L2
 	help
 	  This feature is for new V4L2 APIs all about digital camera
 
-if CPU_EXYNOS4210 || CPU_EXYNOS4212
+if CPU_EXYNOS4210 || CPU_EXYNOS4212 || CPU_EXYNOS4412
 	source "drivers/media/video/samsung/fimc/Kconfig"
 	source "drivers/media/video/samsung/fimc_external_isp/Kconfig"
 	source "drivers/media/video/samsung/mfc5x/Kconfig"
-
+    source "drivers/media/video/samsung/mali/Kconfig"
+    source "drivers/media/video/samsung/ump/Kconfig"
 endif
-
 
 config VIDEO_FIMG2D
 	bool
-	select S5P_SYSTEM_MMU
 	depends on VIDEO_SAMSUNG
 	default n
 
@@ -32,18 +31,24 @@ config VIDEO_FIMG2D_DEBUG
 	depends on VIDEO_FIMG2D
 	default n
 
+if ARCH_EXYNOS5
 source "drivers/media/video/samsung/fimg2d3x/Kconfig"
 source "drivers/media/video/samsung/fimg2d4x/Kconfig"
-source "drivers/media/video/samsung/fimg2d_android/Kconfig"
-
-source "drivers/media/video/samsung/ump/Kconfig"
-source "drivers/media/video/samsung/mali/Kconfig"
-
-if CPU_EXYNOS4212 || CPU_EXYNOS5250
-	source "drivers/media/video/samsung/jpeg/Kconfig"
-	source "drivers/media/video/samsung/jpeg_v2x/Kconfig"
 endif
 
+if ARCH_EXYNOS4
+source "drivers/media/video/samsung/fimg2d3x-exynos4/Kconfig"
+source "drivers/media/video/samsung/fimg2d4x-exynos4/Kconfig"
+endif
+
+
+if CPU_EXYNOS4210
+	source "drivers/media/video/samsung/jpeg/Kconfig"
+endif
+
+if CPU_EXYNOS4212 || CPU_EXYNOS4412 || CPU_EXYNOS5250
+	source "drivers/media/video/samsung/jpeg_v2x/Kconfig"
+endif
 
 if VIDEO_SAMSUNG
 comment "Reserved memory configurations"
@@ -111,4 +116,3 @@ config VIDEO_SAMSUNG_MEMSIZE_TVOUT
 	depends on VIDEO_TVOUT
 	default "16384"
 endif
-

@@ -297,6 +297,7 @@ struct g2d_global {
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	struct early_suspend	early_suspend;
 #endif	
+	int                     irq_handled;
 };
 
 

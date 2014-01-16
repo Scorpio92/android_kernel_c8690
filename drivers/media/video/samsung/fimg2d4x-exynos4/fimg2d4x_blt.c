@@ -17,7 +17,7 @@
 #include <linux/atomic.h>
 #include <linux/dma-mapping.h>
 #include <asm/cacheflush.h>
-#include <plat/sysmmu.h>
+#include <plat/s5p-sysmmu.h>
 #ifdef CONFIG_PM_RUNTIME
 #include <plat/devs.h>
 #include <linux/pm_runtime.h>
@@ -38,7 +38,9 @@ static inline void fimg2d4x_blit_wait(struct fimg2d_control *info, struct fimg2d
 		fimg2d_dump_command(cmd);
 
 		if (!fimg2d4x_blit_done_status(info))
-			info->err = true; /* device error */
+			printk(KERN_ERR "[%s] G2D operation is not finished", __func__);
+
+		fimg2d4x_sw_reset(info);
 	}
 }
 
@@ -62,12 +64,17 @@ void fimg2d4x_bitblt(struct fimg2d_control *info)
 #endif
 	fimg2d_clk_on(info);
 
-	while ((cmd = fimg2d_get_first_command(info))) {
-		ctx = cmd->ctx;
-		if (info->err) {
-			printk(KERN_ERR "[%s] device error\n", __func__);
-			goto blitend;
+	while (1) {
+		spin_lock(&info->bltlock);
+		cmd = fimg2d_get_first_command(info);
+		if (!cmd) {
+			atomic_set(&info->active, 0);
+			spin_unlock(&info->bltlock);
+			break;
 		}
+		spin_unlock(&info->bltlock);
+
+		ctx = cmd->ctx;
 
 		atomic_set(&info->busy, 1);
 
@@ -76,9 +83,13 @@ void fimg2d4x_bitblt(struct fimg2d_control *info)
 			goto blitend;
 
 		if (cmd->image[IDST].addr.type != ADDR_PHYS) {
-			pgd = (unsigned long *)ctx->mm->pgd;
-			exynos_sysmmu_enable(info->dev,
-					(unsigned long)virt_to_phys(pgd));
+			if ((cmd->image[IDST].addr.type == ADDR_USER_CONTIG) ||
+					(cmd->image[ISRC].addr.type == ADDR_USER_CONTIG))
+				pgd = (unsigned long *)ctx->pgd_clone;
+			else
+				pgd = (unsigned long *)ctx->mm->pgd;
+
+			s5p_sysmmu_enable(info->dev, (unsigned long)virt_to_phys(pgd));
 			fimg2d_debug("sysmmu enable: pgd %p ctx %p seq_no(%u)\n",
 					pgd, ctx, cmd->seq_no);
 		}
@@ -92,22 +103,26 @@ void fimg2d4x_bitblt(struct fimg2d_control *info)
 		info->run(info);
 		fimg2d4x_blit_wait(info, cmd);
 
+		if (info->fault_addr)
+			fimg2d_mmutable_value_replace(cmd, info->fault_addr, 0);
 #ifdef PERF_PROFILE
 		perf_end(cmd->ctx, PERF_BLIT);
 #endif
 		if (cmd->image[IDST].addr.type != ADDR_PHYS) {
-			exynos_sysmmu_disable(info->dev);
+			s5p_sysmmu_disable(info->dev);
 			fimg2d_debug("sysmmu disable\n");
 		}
 blitend:
-		fimg2d_del_command(info, cmd);
+		spin_lock(&info->bltlock);
+		fimg2d_dequeue(&cmd->node);
+		kfree(cmd);
+		atomic_dec(&ctx->ncmd);
 
 		/* wake up context */
 		if (!atomic_read(&ctx->ncmd))
 			wake_up(&ctx->wait_q);
+		spin_unlock(&info->bltlock);
 	}
-
-	atomic_set(&info->active, 0);
 
 	fimg2d_clk_off(info);
 #ifdef CONFIG_PM_RUNTIME
@@ -116,19 +131,6 @@ blitend:
 #endif
 
 	fimg2d_debug("exit blitter\n");
-}
-
-static inline int is_opaque(enum color_format fmt)
-{
-	switch (fmt) {
-	case CF_ARGB_8888:
-	case CF_ARGB_1555:
-	case CF_ARGB_4444:
-		return 0;
-
-	default:
-		return 1;
-	}
 }
 
 static int fast_op(struct fimg2d_bltcmd *cmd)

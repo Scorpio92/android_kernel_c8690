@@ -1,4 +1,4 @@
-/* drivers/media/video/samsung/fimg2d_android/fimg2d_core.c
+/* drivers/media/video/samsung/fimg2d3x/fimg2d_core.c
  *
  * Copyright  2010 Samsung Electronics Co, Ltd. All Rights Reserved. 
  *		      http://www.samsungsemi.com/
@@ -12,7 +12,7 @@
 
 #include <linux/kernel.h>
 #include <linux/clk.h>
-#include <plat/sysmmu.h>
+#include <plat/s5p-sysmmu.h>
 #include <linux/sched.h>
 
 #if defined(CONFIG_S5P_MEM_CMA)
@@ -49,20 +49,16 @@ int g2d_clk_disable(struct g2d_global *g2d_dev)
 void g2d_sysmmu_on(struct g2d_global *g2d_dev)
 {
 	g2d_clk_enable(g2d_dev);
-	sysmmu_on(SYSMMU_G2D);
+	s5p_sysmmu_enable(g2d_dev->dev,
+			(unsigned long)virt_to_phys((void *)init_mm.pgd));
 	g2d_clk_disable(g2d_dev);
 }
 
 void g2d_sysmmu_off(struct g2d_global *g2d_dev)
 {
 	g2d_clk_enable(g2d_dev);
-	sysmmu_off(SYSMMU_G2D);
+	s5p_sysmmu_disable(g2d_dev->dev);
 	g2d_clk_disable(g2d_dev);
-}
-
-void g2d_sysmmu_set_pgd(u32 pgd)
-{
-	sysmmu_set_tablebase_pgd(SYSMMU_G2D, pgd);
 }
 
 void g2d_fail_debug(g2d_params *params)
@@ -119,6 +115,8 @@ int g2d_init_regs(struct g2d_global *g2d_dev, g2d_params *params)
 	if (g2d_check_params(params) < 0)
 		return -1;
 
+	g2d_reset(g2d_dev);
+
 	/* source image */	
 	blt_cmd |= g2d_set_src_img(g2d_dev, src_rect, flag);    
 
@@ -128,9 +126,6 @@ int g2d_init_regs(struct g2d_global *g2d_dev, g2d_params *params)
 	/* rotation */
 	blt_cmd |= g2d_set_rotation(g2d_dev, flag);
 
-	/* scale */
-	blt_cmd |= g2d_set_scale(g2d_dev,src_rect,dst_rect,flag);
-	
 	/* clipping */
 	blt_cmd |= g2d_set_clip_win(g2d_dev, clip);
 
@@ -147,6 +142,28 @@ int g2d_init_regs(struct g2d_global *g2d_dev, g2d_params *params)
 	g2d_set_bitblt_cmd(g2d_dev, src_rect, dst_rect, clip, blt_cmd);
 
 	return 0;
+}
+
+int g2d_check_overlap(g2d_rect src_rect, g2d_rect dst_rect, g2d_clip clip)
+{
+	unsigned int src_start_addr;
+	unsigned int src_end_addr;
+	unsigned int dst_start_addr;
+	unsigned int dst_end_addr;
+
+	src_start_addr = (unsigned int)GET_START_ADDR(src_rect);
+	src_end_addr = src_start_addr + (unsigned int)GET_RECT_SIZE(src_rect);
+	dst_start_addr = (unsigned int)GET_START_ADDR_C(dst_rect, clip);
+	dst_end_addr = dst_start_addr + (unsigned int)GET_RECT_SIZE_C(dst_rect, clip);
+
+	if ((dst_start_addr >= src_start_addr) && (dst_start_addr <= src_end_addr))
+		return true;
+	if ((dst_end_addr >= src_start_addr) && (dst_end_addr <= src_end_addr))
+		return true;
+	if ((src_start_addr >= dst_start_addr) && (src_end_addr <= dst_end_addr))
+		return true;
+
+	return false;
 }
 
 int g2d_do_blit(struct g2d_global *g2d_dev, g2d_params *params)
@@ -172,6 +189,9 @@ int g2d_do_blit(struct g2d_global *g2d_dev, g2d_params *params)
 	{
 		g2d_clip clip_src;
 		g2d_clip_for_src(&params->src_rect, &params->dst_rect, &params->clip, &clip_src);
+
+		if (g2d_check_overlap(params->src_rect, params->dst_rect, params->clip))
+			return false;
 
 		g2d_dev->src_attribute =
 			g2d_check_pagetable((unsigned char *)GET_START_ADDR(params->src_rect),
@@ -209,7 +229,8 @@ int g2d_do_blit(struct g2d_global *g2d_dev, g2d_params *params)
 		}
 	}
 
-	g2d_sysmmu_set_pgd((u32)virt_to_phys((void *)pgd));
+	s5p_sysmmu_set_tablebase_pgd(g2d_dev->dev,
+					(u32)virt_to_phys((void *)pgd));
 
 	if(g2d_init_regs(g2d_dev, params) < 0) {
 		return false;
@@ -228,6 +249,8 @@ int g2d_wait_for_finish(struct g2d_global *g2d_dev, g2d_params *params)
 {
 	if(atomic_read(&g2d_dev->is_mmu_faulted) == 1) {
 		FIMG2D_ERROR("error : sysmmu_faulted early\n");
+		FIMG2D_ERROR("faulted addr: 0x%x\n", g2d_dev->faulted_addr);
+		g2d_fail_debug(params);
 		atomic_set(&g2d_dev->is_mmu_faulted, 0);
 		return false;
 	}
@@ -236,8 +259,8 @@ int g2d_wait_for_finish(struct g2d_global *g2d_dev, g2d_params *params)
 		g2d_check_fifo_state_wait(g2d_dev);
 	} else {
 		if(wait_event_interruptible_timeout(g2d_dev->waitq,
-			(atomic_read(&g2d_dev->in_use) == 0),
-			msecs_to_jiffies(G2D_TIMEOUT)) == 0) {
+					g2d_dev->irq_handled == 1,
+					msecs_to_jiffies(G2D_TIMEOUT)) == 0) {
 			if(atomic_read(&g2d_dev->is_mmu_faulted) == 1) {
 				FIMG2D_ERROR("error : sysmmu_faulted\n");
 				FIMG2D_ERROR("faulted addr: 0x%x\n", g2d_dev->faulted_addr);
@@ -250,11 +273,12 @@ int g2d_wait_for_finish(struct g2d_global *g2d_dev, g2d_params *params)
 			return false;
 		} else if(atomic_read(&g2d_dev->is_mmu_faulted) == 1) {
 			FIMG2D_ERROR("error : sysmmu_faulted but auto recoveried\n");
+			FIMG2D_ERROR("faulted addr: 0x%x\n", g2d_dev->faulted_addr);
+			g2d_fail_debug(params);
 			atomic_set(&g2d_dev->is_mmu_faulted, 0);
 			return false;
 		}
 	}
-	atomic_set(&g2d_dev->in_use, 0);
 	return true;
 }
 

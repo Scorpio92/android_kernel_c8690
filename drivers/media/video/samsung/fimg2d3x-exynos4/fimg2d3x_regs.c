@@ -1,4 +1,4 @@
-/* drivers/media/video/samsung/fimg2d_android/fimg2d3x_regs.c
+/* drivers/media/video/samsung/fimg2d3x/fimg2d3x_regs.c
  *
  * Copyright  2010 Samsung Electronics Co, Ltd. All Rights Reserved. 
  *		      http://www.samsungsemi.com/
@@ -12,7 +12,7 @@
 
 #include <mach/map.h>
 #include <asm/io.h>
-#include <mach/regs-fimg2d.h>
+#include <mach/regs-fimg2d3x.h>
 
 #include "fimg2d3x_regs.h"
 #include "fimg2d.h"
@@ -67,6 +67,10 @@ int g2d_check_params(g2d_params *params)
 	g2d_flag * flag     = &params->flag;
 
 	/* source */
+	if (0 > src_rect->x || 0 > src_rect->y) {
+		return -1;
+	}
+
 	if (0 == src_rect->h || 0 == src_rect->w) {
 		return -1;
 	}
@@ -76,9 +80,13 @@ int g2d_check_params(g2d_params *params)
 	}
 
 	/* destination */
+	if (0 > dst_rect->x || 0 > dst_rect->y) {
+		return -1;
+	}
+
 	if (0 == dst_rect->h || 0 == dst_rect->w) {
 		return -1;
-	}		
+	}
 
 	if (8000 < dst_rect->x+dst_rect->w || 8000 < dst_rect->y+dst_rect->h) {
 		return -1;
@@ -113,8 +121,8 @@ u32 g2d_set_src_img(struct g2d_global *g2d_dev, g2d_rect * rect, g2d_flag * flag
 		writel(G2D_SRC_SELECT_R_USE_FG_COLOR, g2d_dev->base + SRC_SELECT_REG);
 
 		/* foreground color */
-               // writel(flag->src_color, g2d_dev->base + FG_COLOR_REG);		
-               writel(0, g2d_dev->base + FG_COLOR_REG);
+		// writel(flag->src_color, g2d_dev->base + FG_COLOR_REG);		
+		writel(0, g2d_dev->base + FG_COLOR_REG);	
 	} else {
 		/* select source */
 		writel(G2D_SRC_SELECT_R_NORMAL, g2d_dev->base + SRC_SELECT_REG);
@@ -135,9 +143,6 @@ u32 g2d_set_src_img(struct g2d_global *g2d_dev, g2d_rect * rect, g2d_flag * flag
 		data = ((rect->y + rect->h) << 16) | (rect->x + rect->w);
 		writel(data, g2d_dev->base + SRC_RIGHT_BOTTOM_REG);
         
-		if (flag->potterduff_mode == G2D_Src_Mode) {
-			blt_cmd |= G2D_BLT_CMD_R_SRC_NON_PRE_BLEND_CONSTANT_ALPHA;
-		}
 	}
 
 	return blt_cmd;
@@ -318,7 +323,10 @@ u32 g2d_set_alpha(struct g2d_global *g2d_dev, g2d_flag * flag)
 
 	/* Alpha Value */
 	if(flag->alpha_val <= G2D_ALPHA_VALUE_MAX) {
-		blt_cmd |= G2D_BLT_CMD_R_ALPHA_BLEND_ALPHA_BLEND;
+		if ((flag->potterduff_mode == G2D_Clear_Mode) || (flag->potterduff_mode == G2D_Src_Mode))
+			blt_cmd |= G2D_BLT_CMD_R_ALPHA_BLEND_NONE;
+		else
+			blt_cmd |= G2D_BLT_CMD_R_ALPHA_BLEND_ALPHA_BLEND;
 		writel((flag->alpha_val & 0xff), g2d_dev->base + ALPHA_REG);
 	} else {
 		blt_cmd |= G2D_BLT_CMD_R_ALPHA_BLEND_NONE;
@@ -326,67 +334,14 @@ u32 g2d_set_alpha(struct g2d_global *g2d_dev, g2d_flag * flag)
 
 	return blt_cmd;
 }
-u32 g2d_set_scale(struct g2d_global *g2d_dev, g2d_rect * src_rect, g2d_rect * dst_rect, g2d_flag * flag)
-{
-	#define FRACTION_MAX (0x10000)
-	u32 blt_cmd = 0;
-	int data_w = 0, data_h = 0;
-	int src_w,src_h,dst_w,dst_h;
-
-	if ((src_rect->w  != dst_rect->w)
-		|| (src_rect->h  != dst_rect->h)) 
-	{
-		//for rotate only, if rotate 90, and not scale, disable scale here.
-		if((src_rect->w  == dst_rect->h)
-			&&(src_rect->h  == dst_rect->w)
-			&&((flag->rotate_val == G2D_ROT_90) || (flag->rotate_val ==G2D_ROT_270)))
-		{
-			writel(0x0, g2d_dev->base + SRC_SCALE_CTRL_REG);
-			//printk("\ng2d_set_scale:disable scale when rotate only");
-			return blt_cmd;
-		}
-		
-		//set repeat mode to None, later can pass in
-		writel(0x4, g2d_dev->base + SRC_REPEAT_MODE_REG);
-		//writel(0xFFFF00FF, g2d_dev->base + SRC_PAD_VALUE_REG);		
-		//using nearest sampling, later can pass in
-		writel(0x1, g2d_dev->base + SRC_SCALE_CTRL_REG);
-
-		src_w = src_rect->w;
-		src_h = src_rect->h;
-		dst_w = dst_rect->w;
-		dst_h = dst_rect->h;
-
-	      if((flag->rotate_val == G2D_ROT_90) || (flag->rotate_val ==G2D_ROT_270))
-	      {
-	      		//jmq.if rotate, change the dst h/w
-			dst_w = dst_rect->h;
-			dst_h = dst_rect->w;
-	       }
-
-		data_w = (src_w / dst_w)*FRACTION_MAX+ ((src_w %dst_w)*FRACTION_MAX)/dst_w;
-		data_h = (src_h / dst_h)*FRACTION_MAX+ ((src_h %dst_h)*FRACTION_MAX)/dst_h;
-		
-		//set x, y scalor
-		writel(data_w, g2d_dev->base + SRC_XSCALE_REG);
-		writel(data_h, g2d_dev->base + SRC_YSCALE_REG);
-	
-	}
-	else	{
-		writel(0x0, g2d_dev->base + SRC_SCALE_CTRL_REG);
-	}
-	
-	return blt_cmd;
-}
 
 void g2d_set_bitblt_cmd(struct g2d_global *g2d_dev, g2d_rect * src_rect, g2d_rect * dst_rect, g2d_clip * clip, u32 blt_cmd)
 {
 	if ((src_rect->w  != dst_rect->w)
-		|| (src_rect->h  != dst_rect->h)) 
-	{
-		//blt_cmd |= G2D_BLT_CMD_R_STRETCH_ENABLE;//jmq.reserved bit in v4.1
+		|| (src_rect->h  != dst_rect->h)) {
+		blt_cmd |= G2D_BLT_CMD_R_STRETCH_ENABLE;
 	}
-
+	
 	if ((clip->t != dst_rect->y) || (clip->b != dst_rect->y + dst_rect->h) 
 		|| (clip->l != dst_rect->x) || (clip->r != dst_rect->x + dst_rect->w)) {
 		blt_cmd |= G2D_BLT_CMD_R_CW_ENABLE;
@@ -414,7 +369,7 @@ void g2d_start_bitblt(struct g2d_global *g2d_dev, g2d_params *params)
 	if (!(params->flag.render_mode & G2D_POLLING)) {
 		writel(G2D_INTEN_R_CF_ENABLE, g2d_dev->base + INTEN_REG);
 	}
-	//writel(0x7, g2d_dev->base + CACHECTL_REG); //jmq.remove in 4.1
+	writel(0x7, g2d_dev->base + CACHECTL_REG);
 
 	writel(G2D_BITBLT_R_START, g2d_dev->base + BITBLT_START_REG);
 }

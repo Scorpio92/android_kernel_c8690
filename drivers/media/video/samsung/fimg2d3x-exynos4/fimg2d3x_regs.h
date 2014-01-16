@@ -1,4 +1,4 @@
-/* drivers/media/video/samsung/fimg2d_android/fimg2d3x_regs.h
+/* drivers/media/video/samsung/fimg2d3x/fimg2d3x_regs.h
  *
  * Copyright (c) 2010 Samsung Electronics
  *		      http://www.samsungsemi.com/
@@ -21,20 +21,12 @@
 #define INTEN_REG               SEC_G2DREG(0x0004)
 #define INTC_PEND_REG           SEC_G2DREG(0x000C)
 #define FIFO_STAT_REG           SEC_G2DREG(0x0010)
-//jmq.removed
-//#define AXI_ID_MODE_REG         SEC_G2DREG(0x0014)
-//#define CACHECTL_REG            SEC_G2DREG(0x0018)
-#define AXI_MODE_REG		SEC_G2DREG(0x001C)
-#define DMA_SFR_BASE_ADDR_REG	SEC_G2DREG(0x0080)
-#define DMA_COMMAND_REG			SEC_G2DREG(0x0084)
-#define DMA_EXE_LIST_NUM_REG		SEC_G2DREG(0x0088)
-#define DMA_STATUS_REG				SEC_G2DREG(0x008C)
-#define DMA_HOLD_CMD_REG			SEC_G2DREG(0x0090)
+#define AXI_ID_MODE_REG         SEC_G2DREG(0x0014)
+#define CACHECTL_REG            SEC_G2DREG(0x0018)
+
 //**   G2D Command   *********************
 #define BITBLT_START_REG        SEC_G2DREG(0x0100)
 #define BITBLT_COMMAND_REG      SEC_G2DREG(0x0104)
-#define BLEND_FUNCTION_REG      SEC_G2DREG(0x0108)
-#define ROUND_MODE_REG      SEC_G2DREG(0x010C)
 
 //**   Rotation & Direction   *************
 #define ROTATE_REG              SEC_G2DREG(0x0200)
@@ -51,13 +43,6 @@
 #define SRC_COLOR_MODE_REG      SEC_G2DREG(0x030C)
 #define SRC_LEFT_TOP_REG        SEC_G2DREG(0x0310)
 #define SRC_RIGHT_BOTTOM_REG    SEC_G2DREG(0x0314)
-#define SRC_PLANE2_BASE_ADDR_REG SEC_G2DREG(0x0318)
-#define SRC_REPEAT_MODE_REG	SEC_G2DREG(0x031C)
-#define SRC_PAD_VALUE_REG		SEC_G2DREG(0x0320)
-#define SRC_A8_RGB_EXT_REG		SEC_G2DREG(0x0324)
-#define SRC_SCALE_CTRL_REG		SEC_G2DREG(0x0328)
-#define SRC_XSCALE_REG			SEC_G2DREG(0x032c)
-#define SRC_YSCALE_REG			SEC_G2DREG(0x0330)
 
 //**   Destination  ***********************
 #define DST_SELECT_REG          SEC_G2DREG(0x0400)
@@ -66,8 +51,7 @@
 #define DST_COLOR_MODE_REG      SEC_G2DREG(0x040C)
 #define DST_LEFT_TOP_REG        SEC_G2DREG(0x0410)
 #define DST_RIGHT_BOTTOM_REG    SEC_G2DREG(0x0414)
-#define DST_PLANE2_BASE_ADDR_REG    SEC_G2DREG(0x0418)
-#define DST_A8_RGB_EXT_REG    SEC_G2DREG(0x041C)
+
 //**   Pattern   **************************
 #define PAT_BASE_ADDR_REG       SEC_G2DREG(0x0500)
 #define PAT_SIZE_REG            SEC_G2DREG(0x0504)
@@ -78,14 +62,7 @@
 //**   Mask   *****************************
 #define MASK_BASE_ADDR_REG      SEC_G2DREG(0x0520)
 #define MASK_STRIDE_REG         SEC_G2DREG(0x0524)
-#define MASK_LEFT_TOP_REG			SEC_G2DREG(0x0528)
-#define MASK_RIGHT_BOTTOM_REG	SEC_G2DREG(0x052C)
-#define MASK_MODE_REG				SEC_G2DREG(0x0530)
-#define MASK_REPEAT_MODE_REG		SEC_G2DREG(0x0534)
-#define MASK_PAD_VALUE_REG		SEC_G2DREG(0x0538)
-#define MASK_SCALE_CTRL_REG		SEC_G2DREG(0x053C)
-#define MASK_XSCALE_REG			SEC_G2DREG(0x0540)
-#define MASK_YSCALE_REG			SEC_G2DREG(0x0544)
+
 //**   Clipping Window  *******************
 #define CW_LEFT_TOP_REG         SEC_G2DREG(0x0600)
 #define	CW_RIGHT_BOTTOM_REG     SEC_G2DREG(0x0604)
@@ -99,7 +76,7 @@
 #define FG_COLOR_REG            SEC_G2DREG(0x0700)
 #define BG_COLOR_REG            SEC_G2DREG(0x0704)
 #define BS_COLOR_REG            SEC_G2DREG(0x0708)
-#define SF_COLOR_REG		SEC_G2DREG(0x070C)
+
 //**   Color Key   ***********************
 #define SRC_COLORKEY_CTRL_REG   SEC_G2DREG(0x0710)
 #define SRC_COLORKEY_DR_MIN_REG SEC_G2DREG(0x0714)
@@ -156,7 +133,7 @@
 #define	G2D_BLT_CMD_R_TRANSPARENT_MODE_BLUESCR  (2<<12)
 
 #define G2D_BLT_CMD_R_CW_ENABLE              (1<<8)
-#define G2D_BLT_CMD_R_STRETCH_ENABLE         (1<<4)//jmq.removed
+#define G2D_BLT_CMD_R_STRETCH_ENABLE         (1<<4)
 #define	G2D_BLT_CMD_R_MASK_ENABLE            (1<<0)
 
 /* rotation register (ROTATE_REG : 0x02000) */

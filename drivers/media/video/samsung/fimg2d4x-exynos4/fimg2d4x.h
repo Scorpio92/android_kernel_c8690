@@ -172,6 +172,7 @@ struct fimg2d_blend_coeff {
 	enum fimg2d_coeff d_coeff;
 };
 
+void fimg2d4x_sw_reset(struct fimg2d_control *info);
 void fimg2d4x_reset(struct fimg2d_control *info);
 void fimg2d4x_enable_irq(struct fimg2d_control *info);
 void fimg2d4x_disable_irq(struct fimg2d_control *info);
@@ -200,9 +201,9 @@ void fimg2d4x_dst_premultiply(struct fimg2d_control *info);
 void fimg2d4x_dst_depremultiply(struct fimg2d_control *info);
 void fimg2d4x_enable_transparent(struct fimg2d_control *info);
 void fimg2d4x_set_bluescreen(struct fimg2d_control *info,
-			     struct fimg2d_bluscr *bluscr);
+				struct fimg2d_bluscr *bluscr);
 void fimg2d4x_enable_clipping(struct fimg2d_control *info,
-			      struct fimg2d_clip *clp);
+				struct fimg2d_clip *clp);
 void fimg2d4x_enable_dithering(struct fimg2d_control *info);
 void fimg2d4x_set_src_scaling(struct fimg2d_control *info,
 				struct fimg2d_scale *scl,

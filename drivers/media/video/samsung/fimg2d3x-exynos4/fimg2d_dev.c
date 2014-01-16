@@ -1,4 +1,4 @@
-/* drivers/media/video/samsung/fimg2d_android/fimg2d3x_dev.c
+/* drivers/media/video/samsung/fimg2d3x/fimg2d3x_dev.c
  *
  * Copyright  2010 Samsung Electronics Co, Ltd. All Rights Reserved. 
  *		      http://www.samsungsemi.com/
@@ -43,8 +43,9 @@
 
 #include <mach/cpufreq.h>
 #include <plat/cpu.h>
+#include <plat/fimg2d.h>
 
-#if defined(CONFIG_S5PV310_DEV_PD)
+#if defined(CONFIG_EXYNOS_DEV_PD)
 #include <linux/pm_runtime.h>
 #endif 
 
@@ -73,9 +74,11 @@ irqreturn_t g2d_irq(int irq, void *dev_id)
 {
 	g2d_set_int_finish(g2d_dev);
 
-	atomic_set(&g2d_dev->in_use,  0);
+	g2d_dev->irq_handled = 1;
 
 	wake_up_interruptible(&g2d_dev->waitq);
+
+	atomic_set(&g2d_dev->in_use, 0);
 
 	return IRQ_HANDLED;
 }
@@ -106,7 +109,7 @@ static int g2d_mmap(struct file* filp, struct vm_area_struct *vma)
 }
 
 
-static int g2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+static long g2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	g2d_params params;
 	int ret = -1;
@@ -170,8 +173,6 @@ static int g2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		
 		mutex_lock(&g2d_dev->lock);
 		
-		atomic_set(&g2d_dev->in_use, 1);
-
 		g2d_clk_enable(g2d_dev);
 
 		if (copy_from_user(&params, (struct g2d_params *)arg, sizeof(g2d_params))) {
@@ -179,34 +180,46 @@ static int g2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			goto g2d_ioctl_done;
 		}
 
-		if (!g2d_do_blit(g2d_dev, &params))
+		atomic_set(&g2d_dev->in_use, 1);
+		if (atomic_read(&g2d_dev->ready_to_run) == 0)
 			goto g2d_ioctl_done;
-		
 
-		if (!(params.flag.render_mode & G2D_HYBRID_MODE)) {
-			if(!(file->f_flags & O_NONBLOCK)) {             
-				if (!g2d_wait_for_finish(g2d_dev, &params))
-					goto g2d_ioctl_done;
-			}
-		} else {
-			ret = 0;
-			goto g2d_ioctl_done2;
+		if (params.flag.memory_type == G2D_MEMORY_USER)
+			down_write(&page_alloc_slow_rwsem);
+
+		g2d_dev->irq_handled = 0;
+		if (!g2d_do_blit(g2d_dev, &params)) {
+			g2d_dev->irq_handled = 1;
+			if (params.flag.memory_type == G2D_MEMORY_USER)
+				up_write(&page_alloc_slow_rwsem);
+			goto g2d_ioctl_done;
 		}
 
+		if(!(file->f_flags & O_NONBLOCK)) {
+			if (!g2d_wait_for_finish(g2d_dev, &params)) {
+				if (params.flag.memory_type == G2D_MEMORY_USER)
+					up_write(&page_alloc_slow_rwsem);
+				goto g2d_ioctl_done;
+			}
+		}
+
+		if (params.flag.memory_type == G2D_MEMORY_USER)
+			up_write(&page_alloc_slow_rwsem);
 		ret = 0;
 
 		break;
 	default :
-		goto g2d_ioctl_done;
+		goto g2d_ioctl_done2;
 		break;
 	}
 
 g2d_ioctl_done :
 
-	atomic_set(&g2d_dev->in_use, 0);
 	g2d_clk_disable(g2d_dev);
 
 	mutex_unlock(&g2d_dev->lock);
+
+	atomic_set(&g2d_dev->in_use, 0);
 
 g2d_ioctl_done2 :
 
@@ -242,7 +255,7 @@ static struct file_operations fimg2d_fops = {
 	.open 		= g2d_open,
 	.release 	= g2d_release,
 	.mmap 		= g2d_mmap,
-	.unlocked_ioctl		= g2d_ioctl,
+	.unlocked_ioctl = g2d_ioctl,
 	.poll		= g2d_poll,
 };
 
@@ -257,7 +270,7 @@ static int g2d_probe(struct platform_device *pdev)
 {
 	struct resource *res;
 	int ret;
-	struct clk *parent,*parentparent;
+	struct clk *parent;
 	struct clk *sclk;
 	
 	FIMG2D_DEBUG("start probe : name=%s num=%d res[0].start=0x%x res[1].start=0x%x\n",
@@ -268,15 +281,22 @@ static int g2d_probe(struct platform_device *pdev)
 	g2d_dev = kzalloc(sizeof(*g2d_dev), GFP_KERNEL);
 	if (!g2d_dev) {
 		FIMG2D_ERROR( "not enough memory\n");
-		return -ENOENT;
+		ret = -ENOENT;
 		goto probe_out;
 	}
+
+#if defined(CONFIG_EXYNOS_DEV_PD)
+	/* to use the runtime PM helper functions */
+	pm_runtime_enable(&pdev->dev);
+	/* enable the power domain */
+	pm_runtime_get_sync(&pdev->dev);
+#endif
 
 	/* get the memory region */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if(res == NULL) {
 		FIMG2D_ERROR("failed to get memory region resouce\n");
-		return -ENOENT;
+		ret = -ENOENT;
 		goto err_get_res;
 	}
 
@@ -286,7 +306,7 @@ static int g2d_probe(struct platform_device *pdev)
 					          pdev->name);
 	if(g2d_dev->mem == NULL) {
 		FIMG2D_ERROR("failed to reserve memory region\n");
-		return -ENOENT;
+		ret = -ENOENT;
 		goto err_mem_req;
 	}
 	
@@ -307,6 +327,9 @@ static int g2d_probe(struct platform_device *pdev)
 		goto err_irq_req;
 	}
 
+	/* blocking I/O */
+	init_waitqueue_head(&g2d_dev->waitq);
+
 	/* request irq */
 	ret = request_irq(g2d_dev->irq_num, g2d_irq, 
 			IRQF_DISABLED, pdev->name, NULL);
@@ -317,17 +340,9 @@ static int g2d_probe(struct platform_device *pdev)
 	}
 
 	/* clock domain setting*/
-	//printk("g2d_probe, start set clock\n");
-	parent = clk_get(&pdev->dev, "mout_g2d0");
+	parent = clk_get(&pdev->dev, "mout_mpll");
 	if (IS_ERR(parent)) {
 		FIMG2D_ERROR("failed to get parent clock\n");
-		ret = -ENOENT;
-		goto err_clk_get1;
-	}
-
-	parentparent 	 = clk_get(&pdev->dev, "mout_mpll");
-	if (IS_ERR(parentparent)) {
-		FIMG2D_ERROR("failed to get parent parent clock\n");
 		ret = -ENOENT;
 		goto err_clk_get1;
 	}
@@ -339,9 +354,8 @@ static int g2d_probe(struct platform_device *pdev)
 		goto err_clk_get2;
 	}
 
-	clk_set_parent(parent, parentparent);
 	clk_set_parent(sclk, parent);
-	clk_set_rate(sclk, 250 * MHZ);
+	clk_set_rate(sclk, 267 * MHZ);	/* 266 Mhz */
 
 	/* clock for gating  */
 	g2d_dev->clock = clk_get(&pdev->dev, "fimg2d");
@@ -359,9 +373,6 @@ static int g2d_probe(struct platform_device *pdev)
 		goto err_mem;
 	}
 
-	/* blocking I/O */
-	init_waitqueue_head(&g2d_dev->waitq);
-
 	/* atomic init */
 	atomic_set(&g2d_dev->in_use, 0);
 	atomic_set(&g2d_dev->num_of_object, 0);
@@ -373,21 +384,11 @@ static int g2d_probe(struct platform_device *pdev)
 	if (ret) {
 		FIMG2D_ERROR("cannot register miscdev on minor=%d (%d)\n",
 			G2D_MINOR, ret);
+		ret = -ENOMEM;
 		goto err_misc_reg;
 	}
 
 	mutex_init(&g2d_dev->lock);
-
-	g2d_sysmmu_on(g2d_dev);
-
-	
-
-#if defined(CONFIG_S5PV310_DEV_PD)
-	/* to use the runtime PM helper functions */
-	pm_runtime_enable(&pdev->dev);
-	/* enable the power domain */
-	pm_runtime_get_sync(&pdev->dev);
-#endif
 
 #if defined(CONFIG_HAS_EARLYSUSPEND)
 	g2d_dev->early_suspend.suspend = g2d_early_suspend;
@@ -399,14 +400,16 @@ static int g2d_probe(struct platform_device *pdev)
 	g2d_dev->dev = &pdev->dev;
 	atomic_set(&g2d_dev->ready_to_run, 1);
 
-	printk("g2d_probe ok!\n");
+	g2d_sysmmu_on(g2d_dev);
+
+	FIMG2D_DEBUG("g2d_probe ok!\n");
 
 	return 0;
 
 err_misc_reg:
+err_mem:
 	clk_put(g2d_dev->clock);
 	g2d_dev->clock = NULL;	
-err_mem:
 err_clk_get3:
 	clk_put(sclk);
 err_clk_get2:
@@ -454,13 +457,13 @@ static int g2d_remove(struct platform_device *dev)
 
 	mutex_destroy(&g2d_dev->lock);
 	
-	kfree(g2d_dev);
-	
 #if defined(CONFIG_HAS_EARLYSUSPEND)
 	unregister_early_suspend(&g2d_dev->early_suspend);
 #endif
 
-#if defined(CONFIG_S5PV310_DEV_PD)
+	kfree(g2d_dev);
+
+#if defined(CONFIG_EXYNOS_DEV_PD)
 	/* disable the power domain */
 	pm_runtime_put(&dev->dev);
 	pm_runtime_disable(&dev->dev);
@@ -474,19 +477,30 @@ static int g2d_remove(struct platform_device *dev)
 #if defined(CONFIG_HAS_EARLYSUSPEND)
 void g2d_early_suspend(struct early_suspend *h)
 {
+	int i = 0;
+
 	atomic_set(&g2d_dev->ready_to_run, 0);
 
 	/* wait until G2D running is finished */
 	while(1) {
 		if (!atomic_read(&g2d_dev->in_use))
 			break;
-		
+
 		msleep_interruptible(2);
+
+		i++;
+		/* Timeout 1sec */
+		if (i > 500) {
+			g2d_clk_enable(g2d_dev);
+			g2d_reset(g2d_dev);
+			g2d_clk_disable(g2d_dev);
+			break;
+		}
 	}
-	
+
 	g2d_sysmmu_off(g2d_dev);
 
-#if defined(CONFIG_S5PV310_DEV_PD)
+#if defined(CONFIG_EXYNOS_DEV_PD)
 	/* disable the power domain */
 	pm_runtime_put(g2d_dev->dev);
 #endif
@@ -495,7 +509,7 @@ void g2d_early_suspend(struct early_suspend *h)
 void g2d_late_resume(struct early_suspend *h)
 {
 
-#if defined(CONFIG_S5PV310_DEV_PD)
+#if defined(CONFIG_EXYNOS_DEV_PD)
 	/* enable the power domain */
 	pm_runtime_get_sync(g2d_dev->dev);
 #endif
@@ -510,29 +524,41 @@ void g2d_late_resume(struct early_suspend *h)
 #if !defined(CONFIG_HAS_EARLYSUSPEND)
 static int g2d_suspend(struct platform_device *dev, pm_message_t state)
 {
+	int i = 0;
+
 	atomic_set(&g2d_dev->ready_to_run, 0);
 
 	/* wait until G2D running is finished */
 	while(1) {
 		if (!atomic_read(&g2d_dev->in_use))
 			break;
-		
+
 		msleep_interruptible(2);
+
+		i++;
+		/* Timeout 1sec */
+		if (i > 500) {
+			g2d_clk_enable(g2d_dev);
+			g2d_reset(g2d_dev);
+			g2d_clk_disable(g2d_dev);
+			break;
+		}
 	}
-	
+
 	g2d_sysmmu_off(g2d_dev);
-	
-#if defined(CONFIG_S5PV310_DEV_PD)
+
+#if defined(CONFIG_EXYNOS_DEV_PD)
 	/* disable the power domain */
 	pm_runtime_put(g2d_dev->dev);
-#endif	
+#endif
 
 	return 0;
 }
+
 static int g2d_resume(struct platform_device *pdev)
 {
 
-#if defined(CONFIG_S5PV310_DEV_PD)
+#if defined(CONFIG_EXYNOS_DEV_PD)
 	/* enable the power domain */
 	pm_runtime_get_sync(g2d_dev->dev);
 #endif
@@ -545,7 +571,7 @@ static int g2d_resume(struct platform_device *pdev)
 }
 #endif
 
-#if defined(CONFIG_S5PV310_DEV_PD)
+#if defined(CONFIG_EXYNOS_DEV_PD)
 static int g2d_runtime_suspend(struct device *dev)
 {
 	return 0;
@@ -573,7 +599,7 @@ static struct platform_driver fimg2d_driver = {
 	.driver		= {
 				.owner	= THIS_MODULE,
 				.name	= "s5p-fimg2d",
-#if defined(CONFIG_S5PV310_DEV_PD)
+#if defined(CONFIG_EXYNOS_DEV_PD)
 				.pm	= &g2d_pm_ops,
 #endif
 			},

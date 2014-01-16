@@ -1,4 +1,4 @@
-/* drivers/media/video/samsung/fimg2d_android/fimg2d3x_cache.c
+/* drivers/media/video/samsung/fimg2d3x/fimg2d3x_cache.c
  *
  * Copyright  2010 Samsung Electronics Co, Ltd. All Rights Reserved. 
  *		      http://www.samsungsemi.com/
@@ -84,9 +84,17 @@ u32 g2d_check_pagetable(void * vaddr, unsigned int size, unsigned long pgd)
     
     for (;;) {
 	level_one_phy = (pgd & 0xffffc000) | (((u32)vaddr & 0xfff00000)>>18);
+	if ((int)phys_to_virt(level_one_phy) < 0xc0000000) {
+		FIMG2D_ERROR("Level1 page table mapping missed, missed address = %p", phys_to_virt(level_one_phy));
+		return G2D_PT_NOTVALID;
+	}
 	level_one_value = readl(phys_to_virt(level_one_phy));
 
 	level_two_phy = (level_one_value & 0xfffffc00) | (((u32)vaddr & 0x000ff000) >> 10);
+	if ((int)phys_to_virt(level_two_phy) < 0xc0000000) {
+		FIMG2D_ERROR("Level2 page table mapping missed, missed address = %p", phys_to_virt(level_two_phy));
+		return G2D_PT_NOTVALID;
+	}
 	level_two_value = readl(phys_to_virt(level_two_phy));
 
 	if (((level_one_value & 0x3) != 0x1) || ((level_two_value & 0x3) != 0x3)) {
