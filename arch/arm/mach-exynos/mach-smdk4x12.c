@@ -126,7 +126,7 @@
 #ifdef CONFIG_RTC_MAX8997
 #include <linux/rtc-max8997.h>
 #endif
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 #include <mach/secmem.h>
 #endif
 #include <mach/dev.h>
@@ -6752,7 +6752,7 @@ static void __init exynos4_reserve_mem(void)
 			.start = 0
 		},
 #endif
-#if !defined(CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION) && \
+#if !defined(CONFIG_EXYNOS_CONTENT_PATH_PROTECTION) && \
 	defined(CONFIG_VIDEO_SAMSUNG_MEMSIZE_FIMC3)
 		{
 			.name = "fimc3",
@@ -6768,7 +6768,7 @@ static void __init exynos4_reserve_mem(void)
 #endif
 #ifdef CONFIG_VIDEO_SAMSUNG_MEMSIZE_MFC1
 		{
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 			.name = "mfc-normal",
 #else
 			.name = "mfc1",
@@ -6777,7 +6777,7 @@ static void __init exynos4_reserve_mem(void)
 			{ .alignment = 1 << 17 },
 		},
 #endif
-#if !defined(CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION) && \
+#if !defined(CONFIG_EXYNOS_CONTENT_PATH_PROTECTION) && \
 	defined(CONFIG_VIDEO_SAMSUNG_MEMSIZE_MFC0)
 		{
 			.name = "mfc0",
@@ -6809,7 +6809,7 @@ static void __init exynos4_reserve_mem(void)
 		},
 #endif
 #endif
-#if !defined(CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION) && \
+#if !defined(CONFIG_EXYNOS_CONTENT_PATH_PROTECTION) && \
 	defined(CONFIG_VIDEO_SAMSUNG_S5P_MFC)
 		{
 			.name		= "b2",
@@ -6840,7 +6840,7 @@ static void __init exynos4_reserve_mem(void)
 			.size = 0
 		},
 	};
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	static struct cma_region regions_secure[] = {
 #ifdef CONFIG_VIDEO_SAMSUNG_MEMSIZE_FIMD_VIDEO
 		{
@@ -6871,7 +6871,7 @@ static void __init exynos4_reserve_mem(void)
 			.size = 0
 		},
 	};
-#else /* !CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION */
+#else /* !CONFIG_EXYNOS_CONTENT_PATH_PROTECTION */
 	struct cma_region *regions_secure = NULL;
 #endif
 	static const char map[] __initconst =
@@ -6880,7 +6880,7 @@ static void __init exynos4_reserve_mem(void)
 #endif
 		"android_pmem.0=pmem;android_pmem.1=pmem_gpu1;"
 		"s3cfb.0/fimd=fimd;exynos4-fb.0/fimd=fimd;"
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 		"s3cfb.0/video=video;exynos4-fb.0/video=video;"
 #endif
 		"s3c-fimc.0=fimc0;s3c-fimc.1=fimc1;s3c-fimc.2=fimc2;s3c-fimc.3=fimc3;"
@@ -6904,7 +6904,7 @@ static void __init exynos4_reserve_mem(void)
 		"s5p-mixer=tv;"
 		"s5p-fimg2d=fimg2d;"
 		"ion-exynos=ion,fimd,fimc0,fimc1,fimc2,fimc3,fw,b1,b2;"
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 		"s5p-smem/video=video;"
 		"s5p-smem/sectbl=sectbl;"
 #endif
@@ -8418,7 +8418,7 @@ static void __init smdk4x12_machine_init(void)
 	s3c_device_fimc1.dev.parent = &exynos4_device_pd[PD_CAM].dev;
 	s3c_device_fimc2.dev.parent = &exynos4_device_pd[PD_CAM].dev;
 	s3c_device_fimc3.dev.parent = &exynos4_device_pd[PD_CAM].dev;
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	secmem.parent = &exynos4_device_pd[PD_CAM].dev;
 #endif
 #endif
