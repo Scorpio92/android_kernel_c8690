@@ -198,6 +198,10 @@ config CPU_FREQ_DEFAULT_GOV_SLEEPY
 	help
 	  Use the CPUFreq governor 'sleepy' as default.
 
+config CPU_FREQ_DEFAULT_GOV_LULZACTIVEQ
+        bool "lulzactiveq"
+        select CPU_FREQ_GOV_LULZACTIVEQ
+
 endchoice
 
 config CPU_FREQ_GOV_PERFORMANCE
@@ -423,6 +427,12 @@ config CPU_FREQ_GOV_SLEEPY
 	depends on CPU_FREQ
 	help
           'sleepy' - an "ondemandx" based tweaked, smart and smooth optimized governor!
+
+config CPU_FREQ_GOV_LULZACTIVEQ
+        tristate "'lulzactiveq' cpufreq governor"
+        depends on CPU_FREQ
+        help
+          'lulzactiveq' - hotplug mechanism added in lulzactive
 
 config CPU_FREQ_DVFS_MONITOR
 	bool "dvfs monitor"
