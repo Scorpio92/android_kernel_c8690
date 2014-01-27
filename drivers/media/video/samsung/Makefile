@@ -5,7 +5,15 @@ obj-$(CONFIG_VIDEO_FIMC)	+= fimc_external_isp/
 endif
 
 obj-$(CONFIG_VIDEO_JPEG)	+= jpeg/
+
+#костыль для сохранения фоток на хайскрине
+ifeq ($(CONFIG_VIDEO_S5K3H7),y)
+obj-$(CONFIG_VIDEO_JPEG_V2X)	+= jpeg_v2x-old/
+else
 obj-$(CONFIG_VIDEO_JPEG_V2X)	+= jpeg_v2x/
+endif
+#end
+
 obj-$(CONFIG_VIDEO_MFC5X)	+= mfc5x/
 
 ifeq ($(CONFIG_ARCH_EXYNOS4), y)
