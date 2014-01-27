@@ -39,6 +39,11 @@
 #include <asm/stacktrace.h>
 #include <asm/mach/time.h>
 
+#ifdef CONFIG_ARCH_EXYNOS4
+#include <asm/hardware/gic.h>
+#include <plat/map-base.h>
+#include <plat/map-s5p.h>
+#endif
 #ifdef CONFIG_CC_STACKPROTECTOR
 #include <linux/stackprotector.h>
 unsigned long __stack_chk_guard __read_mostly;
@@ -127,9 +132,26 @@ void arm_machine_flush_console(void)
 {
 }
 #endif
+#ifdef CONFIG_KERNEL_PANIC_DUMP //ly 20120412
+void arm_machine_panic_reset_prepare()
+{
+	//arm_machine_flush_console();
+	/* Clean and invalidate caches */
+	flush_cache_all();
 
+	/* Turn off caching */
+	cpu_proc_fin();
+
+	/* Push out any further dirty data, and ensure cache is empty */
+	flush_cache_all();
+}
+#endif
 void arm_machine_restart(char mode, const char *cmd)
 {
+	//devin
+	/* call the lcd_off function rusult in system crash */
+	//lcd_off();
+	//mdelay(100);
 	/* Flush the console to make sure all the relevant messages make it
 	 * out to the console drivers */
 	arm_machine_flush_console();
@@ -234,6 +256,10 @@ void cpu_idle(void)
 			local_irq_disable();
 #ifdef CONFIG_PL310_ERRATA_769419
 			wmb();
+#endif
+#ifdef CONFIG_ARCH_EXYNOS4
+			__raw_writel(__raw_readl(S5P_VA_GIC_DIST + GIC_DIST_PRI),
+					S5P_VA_GIC_DIST + GIC_DIST_PRI);
 #endif
 			if (hlt_counter) {
 				local_irq_enable();

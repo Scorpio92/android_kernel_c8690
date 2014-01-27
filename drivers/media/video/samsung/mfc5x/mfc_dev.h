@@ -80,10 +80,9 @@ struct mfc_dev {
 	struct mfc_vcm		vcm_info;
 #endif
 	int			mem_ports;
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	struct mfc_mem		mem_infos[MFC_MAX_MEM_CHUNK_NUM];
 	struct mfc_mem		drm_info;
-	int			drm_playback;
 #else
 	struct mfc_mem		mem_infos[MFC_MAX_MEM_PORT_NUM];
 #endif
@@ -100,21 +99,38 @@ struct mfc_dev {
 
 	struct mfc_fw		fw;
 
+#if defined(CONFIG_DMA_CMA) && defined(CONFIG_USE_MFC_CMA)
+	/* NEW CMA */
+	void            *cma_vaddr;
+	dma_addr_t      cma_dma_addr;
+#endif
+
 	struct s5p_vcm_mmu	*_vcm_mmu;
 
 	struct device		*device;
-#if defined(CONFIG_BUSFREQ) ||defined(CONFIG_BUSFREQ_OPP)
-
+#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
+	struct device           *bus_dev;
+#endif
+#if defined(CONFIG_BUSFREQ)
 	atomic_t		busfreq_lock_cnt; /* Bus frequency Lock count */
 #endif
-
+#if defined(CONFIG_CPU_EXYNOS4210) && defined(CONFIG_EXYNOS4_CPUFREQ)
+	atomic_t		cpufreq_lock_cnt; /* CPU frequency Lock count */
+	int				cpufreq_level; /* CPU frequency leve */
+#endif
 #ifdef CONFIG_BUSFREQ_OPP
-	struct device			*bus_dev;
+	atomic_t  dmcthreshold_lock_cnt; /* dmc max threshold Lock count */
+#endif
+#if SUPPORT_SLICE_ENCODING
+	int			slice_encoding_flag;
+	wait_queue_head_t	wait_slice;
+	int			slice_sys;
+	int			wait_slice_timeout;
+	int			frame_working_flag;
+	wait_queue_head_t	wait_frame;
+	int			frame_sys;
+	int			wait_frame_timeout;
 #endif
 };
 
-#if defined(CONFIG_BUSFREQ_OPP)
-#define BUSFREQ_400MHZ	400000
-#define BUSFREQ_266MHZ	266000
-#endif
 #endif /* __MFC_DEV_H */

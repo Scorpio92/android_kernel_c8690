@@ -64,8 +64,6 @@ config SGI_MBCS
 
 source "drivers/tty/serial/Kconfig"
 
-source "drivers/char/diag/Kconfig"
-
 config TTY_PRINTK
 	bool "TTY driver to output user messages via printk"
 	depends on EXPERT
@@ -638,7 +636,6 @@ config S3C_MEM
 
 config EXYNOS_MEM
 	bool "Support for /dev/exynos-mem"
-	depends on CMA
 	default y
 	help
 	  If you do say Y here, you can mmap using physically linear memories.
@@ -652,5 +649,10 @@ config MSM_SMD_PKT
 	  Enables userspace clients to read and write to some packet SMD
 	  ports via device interface for MSM chipset.
 
+config GPS_PM
+	bool "Enable GPS PM"
+	default n
+	help
+	  Enable GPS PM for the verion after dvt(include) of ICS
 endmenu
 

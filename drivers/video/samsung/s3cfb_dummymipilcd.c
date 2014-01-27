@@ -2942,7 +2942,7 @@ static struct s3cfb_lcd dummy_mipi_lcd = {
 	},
 //Cellon modify start, Jacob, 2012/07/29
 	.polarity = {
-		.rise_vclk = 0,
+		.rise_vclk = 1,
 		.inv_hsync = 0,
 		.inv_vsync = 0,
 		.inv_vden = 0,

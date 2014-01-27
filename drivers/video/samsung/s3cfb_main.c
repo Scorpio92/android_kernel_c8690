@@ -28,6 +28,8 @@
 #include <linux/io.h>
 #include <linux/memory.h>
 #include <linux/pm_runtime.h>
+#include <linux/delay.h>
+#include <linux/sw_sync.h>
 #include <plat/clock.h>
 #include <plat/media.h>
 #include <mach/media.h>
@@ -36,13 +38,28 @@
 //add by isuma	
 #include <linux/time.h> 
 
+#ifdef CONFIG_BUSFREQ_OPP
+#include <mach/dev.h>
+#endif
+
+#ifdef CONFIG_FB_S5P_MDNIE
+#include "s3cfb_mdnie.h"
+#include "mdnie.h"
+#endif
+
 #ifdef CONFIG_HAS_WAKELOCK
 #include <linux/wakelock.h>
 #include <linux/earlysuspend.h>
 #include <linux/suspend.h>
 #endif
 
-#include <linux/delay.h>
+#include <mach/regs-pmu.h>
+#include <plat/regs-fb-s5p.h>
+
+#ifdef CONFIG_FB_S5P_SYSMMU
+#include <plat/s5p-sysmmu.h>
+#endif
+
 // add by justy.yang 20121108 for LCD power domain
 #include <plat/pd.h>
 extern struct platform_device exynos4_device_pd[];
@@ -53,7 +70,7 @@ struct regulator *lcd_regulator = NULL;	//yulu
 struct regulator *lcd_regulator_ldo13 = NULL;//jacob
 extern int s5p_dsim_frame_done_interrupt_enable(u8 enable);
 
-inline struct s3cfb_global *get_fimd_global(int id)
+struct s3cfb_global *get_fimd_global(int id)
 {
 	struct s3cfb_global *fbdev;
 
@@ -64,51 +81,6 @@ inline struct s3cfb_global *get_fimd_global(int id)
 
 	return fbdev;
 }
-
-/////////////////////////////////////////////////////add by isuma
-//For vsync report
-static long long s3cfb_get_system_time(void)
-{
- long long vsync;
-#if 0// much more precise
- struct timeval tv;
- do_gettimeofday(&tv);
- vsync = (long long)(tv.tv_sec)*1000000000LL + tv.tv_usec*1000;
- //printk("do_gettimeofday sec:%d usec:%d\n",tv.tv_sec,tv.tv_usec);
-#else//do_gettimeofday is preciser than current_kernel_time and ktime_get_ts, but not match with userspace
- struct timespec ts;
- //ts = current_kernel_time();
- ktime_get_ts(&ts);
- vsync = (long long)(ts.tv_sec)*1000000000LL + ts.tv_nsec;
- //printk("current_kernel_time sec:%d nsec:%d\n",ts.tv_sec,ts.tv_nsec);
-#endif
- return vsync;
-}
-static void s3c_vsync_kobject_uevent(void)
-{
- char env_buf[120];
- char *envp[2];
- int env_offset = 0;
- long long cur_vsync;
-
- cur_vsync = s3cfb_get_system_time();
- sprintf(env_buf, "VSYNC=%lld",cur_vsync);
- envp[env_offset++] = env_buf;
- envp[env_offset] = NULL;
- kobject_uevent_env(&( fbfimd->fbdev[0]->dev->kobj), KOBJ_CHANGE, envp);
-
-}
-static DECLARE_WORK(vsync_work, (void *)s3c_vsync_kobject_uevent);
-static ssize_t s3cfb_sysfs_show_vsync_report(struct device *dev, struct device_attribute *attr,char *buf)
-{
- long long cur_vsync;
- cur_vsync = s3cfb_get_system_time();
- return sprintf(buf, "%lld\n",cur_vsync);
-}
-
-static DEVICE_ATTR(vsync_report, S_IRUGO | S_IWUSR, s3cfb_sysfs_show_vsync_report,NULL);
-
-/////////////////////////////////////////////////////
 
 int s3cfb_vsync_status_check(void)
 {
@@ -121,18 +93,57 @@ int s3cfb_vsync_status_check(void)
 		return 0;
 }
 
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+static void s3cfb_activate_vsync(struct s3cfb_global *fbdev)
+{
+	int prev_refcount;
+
+	mutex_lock(&fbdev->vsync_info.irq_lock);
+	prev_refcount = fbdev->vsync_info.irq_refcount++;
+	if (!prev_refcount) {
+		s3cfb_set_global_interrupt(fbdev, 1);
+		s3cfb_set_vsync_interrupt(fbdev, 1);
+	}
+
+	mutex_unlock(&fbdev->vsync_info.irq_lock);
+}
+
+static void s3cfb_deactivate_vsync(struct s3cfb_global *fbdev)
+{
+	int new_refcount;
+
+	mutex_lock(&fbdev->vsync_info.irq_lock);
+
+	new_refcount = --fbdev->vsync_info.irq_refcount;
+	WARN_ON(new_refcount < 0);
+	if (!new_refcount) {
+		s3cfb_set_global_interrupt(fbdev, 0);
+		s3cfb_set_vsync_interrupt(fbdev, 0);
+	}
+
+	mutex_unlock(&fbdev->vsync_info.irq_lock);
+}
+#endif
+
 static irqreturn_t s3cfb_irq_frame(int irq, void *dev_id)
 {
 	struct s3cfb_global *fbdev[2];
 	fbdev[0] = fbfimd->fbdev[0];
 
+	spin_lock(&fbdev[0]->vsync_slock);
+
 	if (fbdev[0]->regs != 0)
 		s3cfb_clear_interrupt(fbdev[0]);
 
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+	fbdev[0]->vsync_info.timestamp = ktime_get();
+	wake_up_interruptible_all(&fbdev[0]->vsync_info.wait);
+#endif
+
 	fbdev[0]->wq_count++;
 	wake_up(&fbdev[0]->wq);
-	//modify by isuma
-	schedule_work(&vsync_work);//enable work
+
+	spin_unlock(&fbdev[0]->vsync_slock);
 
 	return IRQ_HANDLED;
 }
@@ -150,6 +161,57 @@ static irqreturn_t s3cfb_irq_fifo(int irq, void *dev_id)
 }
 #endif
 
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+int s3cfb_set_vsync_int(struct fb_info *info, bool active)
+{
+	struct s3cfb_global *fbdev = fbfimd->fbdev[0];
+	bool prev_active = fbdev->vsync_info.active;
+
+	fbdev->vsync_info.active = active;
+
+	if (active && !prev_active)
+		s3cfb_activate_vsync(fbdev);
+	else if (!active && prev_active)
+		s3cfb_deactivate_vsync(fbdev);
+
+	return 0;
+}
+
+/**
+ * s3cfb_wait_for_vsync() - sleep until next VSYNC interrupt or timeout
+ * @sfb: main hardware state
+ * @timeout: timeout in msecs, or 0 to wait indefinitely.
+ */
+int s3cfb_wait_for_vsync(struct s3cfb_global *fbdev, u32 timeout)
+{
+	ktime_t timestamp;
+	int ret;
+
+	pm_runtime_get_sync(fbdev->dev);
+
+	timestamp = fbdev->vsync_info.timestamp;
+	s3cfb_activate_vsync(fbdev);
+	if (timeout) {
+		ret = wait_event_interruptible_timeout(fbdev->vsync_info.wait,
+						!ktime_equal(timestamp,
+						fbdev->vsync_info.timestamp),
+						msecs_to_jiffies(timeout));
+	} else {
+		ret = wait_event_interruptible(fbdev->vsync_info.wait,
+						!ktime_equal(timestamp,
+						fbdev->vsync_info.timestamp));
+	}
+	s3cfb_deactivate_vsync(fbdev);
+
+	pm_runtime_put_sync(fbdev->dev);
+
+	if (timeout && ret == 0)
+		return -ETIMEDOUT;
+
+	return 0;
+}
+#endif
+
 int s3cfb_register_framebuffer(struct s3cfb_global *fbdev)
 {
 	struct s3c_platform_fb *pdata = to_fb_plat(fbdev->dev);
@@ -162,27 +224,76 @@ int s3cfb_register_framebuffer(struct s3cfb_global *fbdev)
 		if (ret) {
 			dev_err(fbdev->dev, "failed to register	\
 				framebuffer device\n");
-			return -EINVAL;
+			goto err;
 		}
-#ifdef CONFIG_FB_S5P_SOFTBUTTON_UI /* Add Menu UI Window 4 */
-		if(j==4){
-			dev_info(fbdev->dev, " set parameters for win4");
-			s3cfb_check_var_window(fbdev, &fbdev->fb[j]->var, fbdev->fb[j]);
-			s3cfb_set_par_window(fbdev, fbdev->fb[j]);
-		}
-#endif
 #ifndef CONFIG_FRAMEBUFFER_CONSOLE
 		if (j == pdata->default_win) {
 			s3cfb_check_var_window(fbdev, &fbdev->fb[j]->var,
 					fbdev->fb[j]);
-			s3cfb_set_par_window(fbdev, fbdev->fb[j]);
-			#ifdef CONFIG_KERNEL_LOGO
+			ret = s3cfb_set_par_window(fbdev, fbdev->fb[j]);
+			if (ret != 0)
+				BUG();
 			s3cfb_draw_logo(fbdev->fb[j]);
-			#endif
 		}
 #endif
 	}
 	return 0;
+
+err:
+	while (--i >= pdata->default_win) {
+		j = i % pdata->nr_wins;
+		unregister_framebuffer(fbdev->fb[j]);
+	}
+	return -EINVAL;
+}
+
+void read_lcd_register(void)
+{
+	struct s3cfb_global *fbdev[1];
+	u32 reg_val[156] = {0,};
+	u32 reg;
+	u32 i;
+
+	fbdev[0] = fbfimd->fbdev[0];
+
+	/*11C00000 ~ 11C00260*/
+	reg = readl(fbdev[0]->regs_org + S3C_VIDCON1);
+	dev_info(fbdev[0]->dev, "11C000%02X| %08X", S3C_VIDCON1, reg);
+	for (i = 0; i < 156; i++)
+		reg_val[i] = readl(fbdev[0]->regs_org + (i*4));
+
+	for (i = 0; i < 39; i++)
+		dev_info(fbdev[0]->dev, "11C0%04X| %08X %08X %08X %08X",
+		(i*16), reg_val[i*4], reg_val[i*4+1], reg_val[i*4+2], reg_val[i*4+3]);
+
+	/*11C040A0 ~ 11C04110*/
+	for (i = 0; i < 32; i++)
+		reg_val[i] = readl(fbdev[0]->regs_org + (0x40A0)+(i*4));
+
+	for (i = 0; i < 8; i++)
+		dev_info(fbdev[0]->dev, "11C0%04X| %08X %08X %08X %08X",
+		(0x40A0)+(i*16), reg_val[i*4], reg_val[i*4+1], reg_val[i*4+2], reg_val[i*4+3]);
+#ifdef CONFIG_FB_S5P_MDNIE
+	reg = readl(fbdev[0]->ielcd_regs + S3C_VIDCON1);
+	dev_info(fbdev[0]->dev, "11C400%02X| %08X", S3C_VIDCON1, reg);
+
+	for (i = 0; i < 4; i++)
+		reg_val[i] = readl(fbdev[0]->ielcd_regs + (i*4));
+
+	for (i = 0; i < 1; i++)
+		dev_info(fbdev[0]->dev, "11C400%02X| %08X %08X %08X %08X",
+		(i*16), reg_val[i*4], reg_val[i*4+1], reg_val[i*4+2], reg_val[i*4+3]);
+#endif
+#ifdef CONFIG_FB_S5P_MIPI_DSIM
+	reg = read_dsim_register(0);
+	dev_info(fbdev[0]->dev, "11C80000| %08X", reg);
+	for (i = 0; i < 4; i++)
+		reg_val[i] = read_dsim_register(i);
+
+	for (i = 0; i < 1; i++)
+		dev_info(fbdev[0]->dev, "11C800%02X| %08X %08X %08X %08X",
+		(i*16), reg_val[i*4], reg_val[i*4+1], reg_val[i*4+2], reg_val[i*4+3]);
+#endif
 }
 
 static int s3cfb_sysfs_show_win_power(struct device *dev,
@@ -244,7 +355,94 @@ static int s3cfb_sysfs_store_win_power(struct device *dev,
 static DEVICE_ATTR(win_power, 0644,
 	s3cfb_sysfs_show_win_power, s3cfb_sysfs_store_win_power);
 
-static int s3cfb_probe(struct platform_device *pdev)
+static ssize_t ielcd_dump_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	int reg_val, i;
+	char temp[50];
+	struct s3cfb_global *fbdev[1];
+
+	fbdev[0] = fbfimd->fbdev[0];
+
+	for (i = 0; i < 25; i++) {
+		reg_val = readl(fbdev[0]->ielcd_regs + i*4);
+		sprintf(temp, "[IELCD]0x11C4_00%02X = 0x%08X\n", (i*4), reg_val);
+		strcat(buf, temp);
+	}
+
+	return strlen(buf);
+}
+static DEVICE_ATTR(ielcd_dump, 0444, ielcd_dump_show, NULL);
+
+static ssize_t fimd_dump_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	int reg_val, i;
+	char temp[50];
+	struct s3cfb_global *fbdev[1];
+
+	fbdev[0] = fbfimd->fbdev[0];
+
+	for (i = 0; i < 25; i++) {
+		reg_val = readl(fbdev[0]->regs_org + i*4);
+		sprintf(temp, "[FIMD]0x11C0_00%02X = 0x%08X\n", (i*4), reg_val);
+		strcat(buf, temp);
+	}
+
+	return strlen(buf);
+}
+static DEVICE_ATTR(fimd_dump, 0444, fimd_dump_show, NULL);
+
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+static int s3cfb_wait_for_vsync_thread(void *data)
+{
+	struct s3cfb_global *fbdev = data;
+
+	while (!kthread_should_stop()) {
+		ktime_t timestamp = fbdev->vsync_info.timestamp;
+		int ret = wait_event_interruptible_timeout(
+						fbdev->vsync_info.wait,
+						!ktime_equal(timestamp,
+						fbdev->vsync_info.timestamp) &&
+						fbdev->vsync_info.active,
+						msecs_to_jiffies(VSYNC_TIMEOUT_MSEC));
+
+		if (ret > 0) {
+			char *envp[2];
+			char buf[64];
+			snprintf(buf, sizeof(buf), "VSYNC=%llu",
+					ktime_to_ns(fbdev->vsync_info.timestamp));
+			envp[0] = buf;
+			envp[1] = NULL;
+			kobject_uevent_env(&fbdev->dev->kobj, KOBJ_CHANGE,
+							envp);
+		}
+	}
+
+	return 0;
+}
+#endif
+
+static void s3c_fb_update_regs_handler(struct kthread_work *work)
+{
+	struct s3cfb_global *fbdev =
+		container_of(work, struct s3cfb_global, update_regs_work);
+	struct s3c_reg_data *data, *next;
+	struct list_head saved_list;
+
+	mutex_lock(&fbdev->update_regs_list_lock);
+	saved_list = fbdev->update_regs_list;
+	list_replace_init(&fbdev->update_regs_list, &saved_list);
+	mutex_unlock(&fbdev->update_regs_list_lock);
+
+	list_for_each_entry_safe(data, next, &saved_list, list) {
+		s3c_fb_update_regs(fbdev, data);
+		list_del(&data->list);
+		kfree(data);
+	}
+}
+
+static int s3cfb_probe(struct platform_device *pdev) 
 {
 	struct s3c_platform_fb *pdata = NULL;
 	struct resource *res = NULL;
@@ -278,6 +476,11 @@ static int s3cfb_probe(struct platform_device *pdev)
 #endif
 
 	fbfimd = kzalloc(sizeof(struct s3cfb_fimd_desc), GFP_KERNEL);
+	if (!fbfimd) {
+		printk(KERN_ERR "failed to allocate for fimd fb descriptor\n");
+		ret = -ENOMEM;
+		goto err_fimd_desc;
+	}
 
 	if (FIMD_MAX == 2)
 		fbfimd->dual = 1;
@@ -291,14 +494,21 @@ static int s3cfb_probe(struct platform_device *pdev)
 		if (!fbdev[i]) {
 			dev_err(fbdev[i]->dev, "failed to allocate for	\
 				global fb structure fimd[%d]!\n", i);
+				ret = -ENOMEM;
 			goto err0;
 		}
 
 		fbdev[i]->dev = &pdev->dev;
-		s3cfb_set_lcd_info(fbdev[i]);
 
+#if defined(CONFIG_MACH_SMDK4X12) || defined(CONFIG_FB_S5P_AMS369FG06)
+		s3cfb_set_lcd_info(fbdev[i]);
+#endif
 		/* platform_data*/
 		pdata = to_fb_plat(&pdev->dev);
+
+		if (pdata->lcd)
+			fbdev[i]->lcd = (struct s3cfb_lcd *)pdata->lcd;
+
 		if (pdata->cfg_gpio)
 			pdata->cfg_gpio(pdev);
 
@@ -322,11 +532,33 @@ static int s3cfb_probe(struct platform_device *pdev)
 			goto err1;
 		}
 		fbdev[i]->regs = ioremap(res->start, res->end - res->start + 1);
+		fbdev[i]->regs_org = fbdev[i]->regs;
 		if (!fbdev[i]->regs) {
 			dev_err(fbdev[i]->dev, "failed to remap io region\n");
 			ret = -EINVAL;
-			goto err1;
+			goto err_ioremap;
 		}
+
+		spin_lock_init(&fbdev[i]->vsync_slock);
+
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+		INIT_LIST_HEAD(&fbdev[i]->update_regs_list);
+		mutex_init(&fbdev[i]->update_regs_list_lock);
+		init_kthread_worker(&fbdev[i]->update_regs_worker);
+
+		fbdev[i]->update_regs_thread = kthread_run(kthread_worker_fn,
+				&fbdev[i]->update_regs_worker, "s3c-fb");
+		if (IS_ERR(fbdev[i]->update_regs_thread)) {
+			int err = PTR_ERR(fbdev[i]->update_regs_thread);
+			fbdev[i]->update_regs_thread = NULL;
+
+			dev_err(fbdev[i]->dev, "failed to run update_regs thread\n");
+			return err;
+		}
+		init_kthread_work(&fbdev[i]->update_regs_work, s3c_fb_update_regs_handler);
+		fbdev[i]->timeline = sw_sync_timeline_create("s3c-fb");
+		fbdev[i]->timeline_max = 0;
+#endif
 
 		/* irq */
 		fbdev[i]->irq = platform_get_irq(pdev, 0);
@@ -348,42 +580,61 @@ static int s3cfb_probe(struct platform_device *pdev)
 		s3cfb_set_fifo_interrupt(fbdev[i], 1);
 		dev_info(fbdev[i]->dev, "fifo underrun trace\n");
 #endif
+#ifdef CONFIG_FB_S5P_MDNIE
+		/*  only FIMD0 is supported */
+		if (i == 0)
+			s3c_mdnie_setup();
+#endif
 		/* hw setting */
 		s3cfb_init_global(fbdev[i]);
 
 		fbdev[i]->system_state = POWER_ON;
 
+		spin_lock_init(&fbdev[i]->slock);
+
 		/* alloc fb_info */
 		if (s3cfb_alloc_framebuffer(fbdev[i], i)) {
 			dev_err(fbdev[i]->dev, "alloc error fimd[%d]\n", i);
+			ret = -ENOMEM;
 			goto err3;
 		}
 
 		/* register fb_info */
 		if (s3cfb_register_framebuffer(fbdev[i])) {
-			//Cellon add start, Jacob, 2013/01/09, for framebuffer memory leak issue
-			struct s3c_platform_fb *pdata_tmp = to_fb_plat(fbdev[i]->dev);
-			int j;			
-			for (j = 0; j < pdata_tmp->nr_wins; j++) {
-				if (fbdev[i]->fb[j])
-					framebuffer_release(fbdev[i]->fb[j]);
-			}
-			kfree(fbdev[i]->fb);
-			//Cellon add end, Jacob, 2013/01/09
 			dev_err(fbdev[i]->dev, "register error fimd[%d]\n", i);
+			ret = -EINVAL;
 			goto err3;
 		}
 
 		/* enable display */
 		s3cfb_set_clock(fbdev[i]);
-		s3cfb_enable_window(fbdev[0], pdata->default_win);
-#ifdef CONFIG_FB_S5P_SOFTBUTTON_UI /* Add Menu UI */
-		s3cfb_enable_window(fbdev[0], 4);
+#ifdef CONFIG_FB_S5P_MDNIE
+		/*  only FIMD0 is supported */
+		if (i == 0) {
+			if (pdata->set_display_path)
+				pdata->set_display_path();
+
+			s3cfb_set_dualrgb(fbdev[i], S3C_DUALRGB_MDNIE);
+			s3c_mdnie_init_global(fbdev[i]);
+			s3c_mdnie_display_on(fbdev[i]);
+		}
 #endif
+		s3cfb_enable_window(fbdev[0], pdata->default_win);
 
 		s3cfb_update_power_state(fbdev[i], pdata->default_win,
 					FB_BLANK_UNBLANK);
+
+		/* Set alpha value width to 8-bit */
+		s3cfb_set_alpha_value_width(fbdev[i], i);
+
 		s3cfb_display_on(fbdev[i]);
+
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+#ifdef CONFIG_BUSFREQ_OPP
+		/* To lock bus frequency in OPP mode */
+		fbdev[i]->bus_dev = dev_get("exynos-busfreq");
+#endif
+#endif
 
 #ifdef CONFIG_HAS_WAKELOCK
 #ifdef CONFIG_HAS_EARLYSUSPEND
@@ -394,7 +645,29 @@ static int s3cfb_probe(struct platform_device *pdev)
 		register_early_suspend(&fbdev[i]->early_suspend);
 #endif
 #endif
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+		init_waitqueue_head(&fbdev[i]->vsync_info.wait);
+
+		/* Create vsync thread */
+		mutex_init(&fbdev[i]->vsync_info.irq_lock);
+
+		fbdev[i]->vsync_info.thread = kthread_run(
+						s3cfb_wait_for_vsync_thread,
+						fbdev[i], "s3c-fb-vsync");
+		if (fbdev[i]->vsync_info.thread == ERR_PTR(-ENOMEM)) {
+			dev_err(fbdev[i]->dev, "failed to run vsync thread\n");
+			fbdev[i]->vsync_info.thread = NULL;
+		}
+#endif
+		ret = device_create_file(fbdev[i]->dev, &dev_attr_fimd_dump);
+		if (ret < 0)
+			dev_err(fbdev[0]->dev, "failed to add sysfs entries\n");
+
+		ret = device_create_file(fbdev[i]->dev, &dev_attr_ielcd_dump);
+		if (ret < 0)
+			dev_err(fbdev[0]->dev, "failed to add sysfs entries\n");
 	}
+
 #ifdef CONFIG_FB_S5P_LCD_INIT
 	/* panel control */
 	if (pdata->backlight_on)
@@ -404,18 +677,27 @@ static int s3cfb_probe(struct platform_device *pdev)
 		pdata->lcd_on(pdev);
 #endif
 
-	//modify by isuma
- 	ret = device_create_file(&(pdev->dev), &dev_attr_vsync_report);
- 	if (ret < 0)
- 	dev_err(fbdev[0]->dev, "failed to add sysfs entries\n");
-
 	ret = device_create_file(&(pdev->dev), &dev_attr_win_power);
 	if (ret < 0)
 		dev_err(fbdev[0]->dev, "failed to add sysfs entries\n");
 
+#ifdef DISPLAY_BOOT_PROGRESS
+	if (!(readl(S5P_INFORM2)))
+		s3cfb_start_progress(fbdev[0]->fb[pdata->default_win]);
+#endif
+
+#ifdef FEATURE_BUSFREQ_LOCK
+	atomic_set(&fbdev[0]->busfreq_lock_cnt, 0);
+#endif
+
+#if defined(CONFIG_LCD_FREQ_SWITCH)
+	lcdfreq_init(fbdev[0]->fb[pdata->default_win]);
+#endif
+
 	dev_info(fbdev[0]->dev, "registered successfully\n");
-	s5p_dsim_frame_done_interrupt_enable(1);
+
 	return 0;
+
 #ifndef CONFIG_TC4_EVT
 err_regulator:
 	regulator_put(lcd_regulator);	//yulu
@@ -426,20 +708,28 @@ err_regulator_ldo13:
 	regulator_put(lcd_regulator_ldo13);	//jacob
 	lcd_regulator_ldo13 = NULL;
 #endif
+
 err3:
 	for (i = 0; i < FIMD_MAX; i++)
 		free_irq(fbdev[i]->irq, fbdev[i]);
 err2:
 	for (i = 0; i < FIMD_MAX; i++)
 		iounmap(fbdev[i]->regs);
+
+err_ioremap:
+	release_mem_region(res->start, res->end - res->start + 1);
+
 err1:
-	for (i = 0; i < FIMD_MAX; i++)
+	for (i = 0; i < FIMD_MAX; i++) {
 		pdata->clk_off(pdev, &fbdev[i]->clock);
-	for (i = 0; i < FIMD_MAX; i++)
-		kfree(fbdev[i]);
+		kfree(fbfimd->fbdev[i]);
+	}
 err0:
+	kfree(fbfimd);
+err_fimd_desc:
 	return ret;
 }
+
 
 static int s3cfb_remove(struct platform_device *pdev)
 {
@@ -449,9 +739,7 @@ static int s3cfb_remove(struct platform_device *pdev)
 	struct s3cfb_global *fbdev[2];
 	int i;
 	int j;
-	
-	//modify by isuma
-  device_remove_file(&(pdev->dev), &dev_attr_vsync_report);
+
 	for (i = 0; i < FIMD_MAX; i++) {
 		fbdev[i] = fbfimd->fbdev[i];
 
@@ -479,6 +767,10 @@ static int s3cfb_remove(struct platform_device *pdev)
 				framebuffer_release(fb);
 			}
 		}
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+		if (fbdev[i]->vsync_info.thread)
+			kthread_stop(fbdev[i]->vsync_info.thread);
+#endif
 
 		kfree(fbdev[i]->fb);
 		kfree(fbdev[i]);
@@ -491,29 +783,101 @@ static int s3cfb_remove(struct platform_device *pdev)
 	return 0;
 }
 
+void s3cfb_lcd0_power_domain_start(void)
+{
+	int timeout;
+	writel(S5P_INT_LOCAL_PWR_EN, S5P_PMU_LCD0_CONF);
+
+	/* Wait max 1ms */
+	timeout = 1000;
+	while ((readl(S5P_PMU_LCD0_CONF + 0x4) & S5P_INT_LOCAL_PWR_EN)\
+		!= S5P_INT_LOCAL_PWR_EN) {
+		if (timeout == 0) {
+			printk(KERN_ERR "Power domain lcd0 enable failed.\n");
+			break;
+		}
+		timeout--;
+		udelay(1);
+	}
+
+	if (timeout == 0) {
+		timeout = 1000;
+		writel(0x1, S5P_PMU_LCD0_CONF + 0x8);
+		writel(S5P_INT_LOCAL_PWR_EN, S5P_PMU_LCD0_CONF);
+		while ((readl(S5P_PMU_LCD0_CONF + 0x4) & S5P_INT_LOCAL_PWR_EN)\
+			!= S5P_INT_LOCAL_PWR_EN) {
+
+			if (timeout == 0) {
+				printk(KERN_ERR "Power domain lcd0 enable failed 2nd.\n");
+				break;
+			}
+
+			timeout--;
+			udelay(1);
+		}
+		writel(0x2, S5P_PMU_LCD0_CONF + 0x8);
+	}
+}
+
+void s3cfb_lcd0_power_domain_stop(void)
+{
+	int timeout;
+
+	writel(0, S5P_PMU_LCD0_CONF);
+
+	/* Wait max 1ms */
+	timeout = 1000;
+	while (readl(S5P_PMU_LCD0_CONF + 0x4) & S5P_INT_LOCAL_PWR_EN) {
+		if (timeout == 0) {
+			printk(KERN_ERR "Power domain lcd0 disable failed.\n");
+			break;
+		}
+		timeout--;
+		udelay(1);
+	}
+
+	if (timeout == 0) {
+		timeout = 1000;
+		writel(0x1, S5P_PMU_LCD0_CONF + 0x8);
+		writel(0, S5P_PMU_LCD0_CONF);
+		while (readl(S5P_PMU_LCD0_CONF + 0x4) & S5P_INT_LOCAL_PWR_EN) {
+			if (timeout == 0) {
+				printk(KERN_ERR "Power domain lcd0 disable failed 2nd.\n");
+				break;
+			}
+			timeout--;
+			udelay(1);
+		}
+		writel(0x2, S5P_PMU_LCD0_CONF + 0x8);
+	}
+}
+
+void s3cfb_lcd0_pmu_off(void)
+{
+	s3cfb_lcd0_power_domain_stop();
+	usleep_range(5000, 5000);
+	s3cfb_lcd0_power_domain_start();
+	printk(KERN_WARNING "lcd0 pmu re_start!!!\n");
+}
+
 #ifdef CONFIG_PM
-#ifdef CONFIG_FB_S5P_AMS369FG06
-extern void ams369fg06_ldi_init(void);
-extern void ams369fg06_ldi_enable(void);
-extern void ams369fg06_ldi_disable(void);
-extern void ams369fg06_gpio_cfg(void);
-#elif defined(CONFIG_FB_S5P_LMS501KF03)
-extern void lms501kf03_ldi_disable(void);
-#endif
-
-
 #ifdef CONFIG_HAS_EARLYSUSPEND
+void (*lcd_early_suspend)(void);
+void (*lcd_late_resume)(void);
 void s3cfb_early_suspend(struct early_suspend *h)
 {
 	struct s3cfb_global *info = container_of(h, struct s3cfb_global, early_suspend);
 	struct s3c_platform_fb *pdata = to_fb_plat(info->dev);
 	struct platform_device *pdev = to_platform_device(info->dev);
 	struct s3cfb_global *fbdev[2];
-	int i;
+	int i, ret;
 
-	printk("s3cfb_early_suspend is called\n");
+	printk(KERN_INFO "+%s\n", __func__);
 
-	//info->system_state = POWER_OFF;
+#ifdef CONFIG_FB_S5P_MIPI_DSIM
+	if (lcd_early_suspend)
+		lcd_early_suspend();
+#endif
 
 	for (i = 0; i < FIMD_MAX; i++) {
 		fbdev[i] = fbfimd->fbdev[i];
@@ -521,15 +885,47 @@ void s3cfb_early_suspend(struct early_suspend *h)
 		if (pdata->backlight_off)
 			pdata->backlight_off(pdev);
 
+		if (pdata->lcd_off)
+			pdata->lcd_off(pdev);
+
+		/* Disable Vsync */
+		s3cfb_set_global_interrupt(fbdev[i], 0);
+		s3cfb_set_vsync_interrupt(fbdev[i], 0);
+
 #ifdef CONFIG_FB_S5P_AMS369FG06
 		ams369fg06_ldi_disable();
 #elif defined(CONFIG_FB_S5P_LMS501KF03)
 		lms501kf03_ldi_disable();
 #endif
-		s3cfb_display_off(fbdev[i]);
+		ret = s3cfb_display_off(fbdev[i]);
+
+#ifdef CONFIG_FB_S5P_MDNIE
+		ret += s3c_mdnie_display_off();
+#endif
+
+		if (ret > 0)
+			s3cfb_lcd0_pmu_off();
+
+		info->system_state = POWER_OFF;
+
+/*вызывает зависон при перезагрузке
+		if (fbdev[i]->regs) {
+			fbdev[i]->regs_org = fbdev[i]->regs;
+			spin_lock(&fbdev[i]->slock);
+			fbdev[i]->regs = 0;
+			spin_unlock(&fbdev[i]->slock);
+		}
+*/
 		if (pdata->clk_off)
 			pdata->clk_off(pdev, &fbdev[i]->clock);
 	}
+
+/*
+#ifdef CONFIG_FB_S5P_MIPI_DSIM
+	s5p_dsim_early_suspend();
+#endif
+*/
+
 #ifdef CONFIG_EXYNOS_DEV_PD
 
 	/* disable the power domain */
@@ -539,7 +935,7 @@ void s3cfb_early_suspend(struct early_suspend *h)
 	/* disabled for showing logo in bootloader 				 */
 	exynos_pd_disable(&exynos4_device_pd[PD_LCD0].dev);
 #endif
-	info->system_state = POWER_OFF;
+
 #ifndef CONFIG_TC4_EVT
 	if( IS_ERR_OR_NULL(lcd_regulator) )
 	{
@@ -552,10 +948,11 @@ void s3cfb_early_suspend(struct early_suspend *h)
 		return;
 	}
 	regulator_force_disable(lcd_regulator); 	//yulu
-//	regulator_force_disable(lcd_regulator_ldo13); 	//jacob
 	regulator_disable(lcd_regulator_ldo13); 	//jacob
 
 #endif
+
+	printk(KERN_INFO "-%s\n", __func__);
 
 	return ;
 }
@@ -623,8 +1020,20 @@ void s3cfb_late_resume(struct early_suspend *h)
 		if (pdata->clk_on)
 			pdata->clk_on(pdev, &fbdev[i]->clock);
 
+#ifdef CONFIG_FB_S5P_MDNIE
+		s3cfb_set_dualrgb(fbdev[i], S3C_DUALRGB_MDNIE);
+#endif
+
 		s3cfb_init_global(fbdev[i]);
 		s3cfb_set_clock(fbdev[i]);
+#ifdef CONFIG_FB_S5P_MDNIE
+#if defined(CONFIG_FB_S5P_S6C1372) || defined(CONFIG_FB_S5P_S6F1202A)
+		s5c1372_ldi_enable();
+#endif
+		s3c_mdnie_init_global(fbdev[i]);
+		set_mdnie_value(g_mdnie, 1);
+		s3c_mdnie_display_on(fbdev[i]);
+#endif
 		s3cfb_display_on(fbdev[i]);
 
 		for (j = 0; j < pdata->nr_wins; j++) {
@@ -645,9 +1054,21 @@ void s3cfb_late_resume(struct early_suspend *h)
 
 		if (pdata->backlight_on)
 			pdata->backlight_on(pdev);
+
+#if defined(CONFIG_FB_S5P_VSYNC_THREAD)
+		mutex_lock(&fbdev[i]->vsync_info.irq_lock);
+		if (fbdev[i]->vsync_info.irq_refcount) {
+			s3cfb_set_global_interrupt(fbdev[i], 1);
+			s3cfb_set_vsync_interrupt(fbdev[i], 1);
+		}
+		mutex_unlock(&fbdev[i]->vsync_info.irq_lock);
+#endif
 	}
 
-	//info->system_state = POWER_ON;
+#ifdef CONFIG_FB_S5P_MIPI_DSIM
+	if (lcd_late_resume)
+		lcd_late_resume();
+#endif
 
 	return;
 }
@@ -662,6 +1083,15 @@ int s3cfb_suspend(struct platform_device *pdev, pm_message_t state)
 	for (i = 0; i < FIMD_MAX; i++) {
 		fbdev[i] = fbfimd->fbdev[i];
 
+#ifdef CONFIG_FB_S5P_MDNIE
+		writel(0, fbdev[i]->regs + 0x27c);
+		msleep(20);
+		reg = readl(S3C_VA_SYS + 0x0210);
+		reg |= (1<<1);
+		writel(reg, S3C_VA_SYS + 0x0210);
+		s3c_mdnie_display_off();
+#endif
+
 		if (atomic_read(&fbdev[i]->enabled_win) > 0) {
 			/* lcd_off and backlight_off isn't needed. */
 			if (fbdev[i]->lcd->deinit_ldi)
@@ -670,7 +1100,9 @@ int s3cfb_suspend(struct platform_device *pdev, pm_message_t state)
 			s3cfb_display_off(fbdev[i]);
 			pdata->clk_off(pdev, &fbdev[i]->clock);
 		}
-
+#ifdef CONFIG_FB_S5P_MDNIE
+		s3c_mdnie_off();
+#endif
 	}
 
 	return 0;
@@ -708,10 +1140,23 @@ int s3cfb_resume(struct platform_device *pdev)
 			fbdev[i]->lcd->deinit_ldi();
 
 		if (atomic_read(&fbdev[i]->enabled_win) > 0) {
+#ifdef CONFIG_FB_S5P_MDNIE
+			reg = readl(S3C_VA_SYS + 0x0210);
+			reg &= ~(1<<13);
+			reg &= ~(1<<12);
+			reg &= ~(3<<10);
+			reg |= (1<<0);
+			reg &= ~(1<<1);
+			writel(reg, S3C_VA_SYS + 0x0210);
+			writel(3, fbdev[i]->regs + 0x27c);
+#endif
 			pdata->clk_on(pdev, &fbdev[i]->clock);
 			s3cfb_init_global(fbdev[i]);
 			s3cfb_set_clock(fbdev[i]);
-
+#ifdef CONFIG_FB_S5P_MDNIE
+			s3c_mdnie_init_global(fbdev[i]);
+			s3c_mdnie_display_on(fbdev[i]);
+#endif
 			for (j = 0; j < pdata->nr_wins; j++) {
 				fb = fbdev[i]->fb[j];
 				win = fb->par;

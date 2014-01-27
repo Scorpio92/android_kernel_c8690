@@ -40,6 +40,20 @@
 
 #define SAMSUNG_MFC_DEV_NAME           "/dev/s3c-mfc"
 
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+#define SUPPORT_SLICE_ENCODING        0 // originaly 1, but we're missing matching userspace
+#else
+#define SUPPORT_SLICE_ENCODING        0
+#endif
+
+/*---------------------------*/
+/* Memory Type               */
+/*---------------------------*/
+typedef enum {
+	MEMORY_PHY_ADDR = 0,
+	MEMORY_USRPTR = 1,
+	MEMORY_DMABUF = 2,
+} SSBSIP_MFC_MEMORY_TYPE;
 
 /*--------------------------------------------------------------------------------*/
 /* Structure and Type                                                             */
@@ -74,6 +88,13 @@ typedef enum {
     NV12_TILE,
     NV21_LINEAR,
 } SSBSIP_MFC_INSTRM_MODE_TYPE;
+
+#if SUPPORT_SLICE_ENCODING
+typedef enum {
+    FRAME = 0,
+    SLICE = 1,
+} SSBSIP_MFC_OUTSTRM_MODE_TYPE;
+#endif
 
 typedef enum {
 	NO_CACHE = 0,
@@ -115,6 +136,7 @@ typedef enum {
     /* C210 specific feature */
     MFC_ENC_SETCONF_VUI_INFO,
     MFC_ENC_SETCONF_I_PERIOD,
+	MFC_ENC_SETCONF_SPS_PPS_GEN,
     MFC_ENC_SETCONF_HIER_P,
 
     MFC_ENC_SETCONF_SEI_GEN,
@@ -127,7 +149,12 @@ typedef enum {
     MFC_GETOUTBUF_DISPLAY_DECODING,
     MFC_GETOUTBUF_DISPLAY_ONLY,
     MFC_GETOUTBUF_DISPLAY_END,
-    MFC_GETOUTBUF_CHANGE_RESOL
+#ifndef CONFIG_SLP
+	MFC_GETOUTBUF_CHANGE_RESOL
+#else
+	MFC_GETOUTBUF_CHANGING_RESOL,
+	MFC_GETOUTBUF_CHANGE_RESOL_DONE
+#endif
 } SSBSIP_MFC_DEC_OUTBUF_STATUS;
 
 typedef enum {
@@ -240,6 +267,9 @@ typedef struct {
     int CbPadVal;                       /* [IN] CB pel value used to fill padding area */
     int CrPadVal;                       /* [IN] CR pel value used to fill padding area */
     int FrameMap;                       /* [IN] Encoding input mode(tile mode or linear mode) */
+#if SUPPORT_SLICE_ENCODING
+    int OutputMode;                     /* [IN] Output mode: Frame/Slice */
+#endif
 
     /* H.264 specific parameters */
     int ProfileIDC;                     /* [IN] profile */
@@ -283,6 +313,9 @@ typedef struct {
     int CbPadVal;                       /* [IN] CB pel value used to fill padding area */
     int CrPadVal;                       /* [IN] CR pel value used to fill padding area */
     int FrameMap;                       /* [IN] Encoding input mode(tile mode or linear mode) */
+#if SUPPORT_SLICE_ENCODING
+    int OutputMode;                     /* [IN] Output mode: Frame/Slice */
+#endif
 
     /* MPEG4 specific parameters */
     int ProfileIDC;                     /* [IN] profile */
@@ -315,6 +348,9 @@ typedef struct {
     int CbPadVal;                       /* [IN] CB pel value used to fill padding area */
     int CrPadVal;                       /* [IN] CR pel value used to fill padding area */
     int FrameMap;                       /* [IN] Encoding input mode(tile mode or linear mode) */
+#if SUPPORT_SLICE_ENCODING
+    int OutputMode;                     /* [IN] Output mode: Frame/Slice */
+#endif
 
     /* H.263 specific parameters */
     int FrameRate;                      /* [IN] rate control parameter(frame rate) */

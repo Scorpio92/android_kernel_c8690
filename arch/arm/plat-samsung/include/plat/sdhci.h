@@ -76,7 +76,9 @@ struct s3c_sdhci_platdata {
 	enum cd_types	cd_type;
 	enum clk_types	clk_type;
 // Cellon add start, Ted Shi, 2011/08/13, for porting bcm4330 wifi
+#ifdef CONFIG_BCMDHD_WIFI
 	unsigned int	pm_flags;
+#endif
 // Cellon add end, Ted Shi, 2011/08/13
 	char		**clocks;	/* set of clock sources */
 

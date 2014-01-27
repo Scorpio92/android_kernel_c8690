@@ -138,18 +138,12 @@ invalidate_complete_page(struct address_space *mapping, struct page *page)
 	return ret;
 }
 
-#ifdef CONFIG_MACH_P4NOTE
-static int unmap_mapcount = -99;
-#endif
 int truncate_inode_page(struct address_space *mapping, struct page *page)
 {
 	if (page_mapped(page)) {
 		unmap_mapping_range(mapping,
 				   (loff_t)page->index << PAGE_CACHE_SHIFT,
 				   PAGE_CACHE_SIZE, 0);
-#ifdef CONFIG_MACH_P4NOTE
-		unmap_mapcount = atomic_read(&(page)->_mapcount);
-#endif
 	}
 	return truncate_complete_page(mapping, page);
 }
@@ -404,12 +398,11 @@ invalidate_complete_page2(struct address_space *mapping, struct page *page)
 	if (page_has_private(page) && !try_to_release_page(page, GFP_KERNEL))
 		return 0;
 
-	clear_page_mlock(page);
-
 	spin_lock_irq(&mapping->tree_lock);
 	if (PageDirty(page))
 		goto failed;
 
+	clear_page_mlock(page);
 	BUG_ON(page_has_private(page));
 	__delete_from_page_cache(page);
 	spin_unlock_irq(&mapping->tree_lock);

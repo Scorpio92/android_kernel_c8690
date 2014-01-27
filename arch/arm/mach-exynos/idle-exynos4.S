@@ -76,9 +76,6 @@ ENTRY(exynos4_enter_lp)
 	mov	r1, #0
 	mov	r2, #0
 	mov	r3, #0
-#ifdef REQUIRES_SEC
- .arch_extension sec 
-#endif
 	smc	0
 #else
 	dsb
@@ -101,9 +98,6 @@ resume_with_mmu:
 	mov	r1, #1
 	mov	r2, #0
 	mov	r3, #0
-#ifdef REQUIRES_SEC
- .arch_extension sec 
-#endif
 	smc	0
 #else
 	mov	r0, #1
@@ -118,9 +112,6 @@ resume_with_mmu:
 	ldr	r2, [r0], #4
 	ldr	r0, =SMC_CMD_C15RESUME
 	mov	r3, #0
-#ifdef REQUIRES_SEC
- .arch_extension sec 
-#endif
 	smc	0
 #else
 	ldr	r1, [r0], #4
@@ -192,18 +183,13 @@ ENTRY(exynos4_idle_resume)
 
 	ldr	r0, =SMC_CMD_L2X0SETUP1
 
-#ifdef REQUIRES_SEC
- .arch_extension sec 
-#endif
 	smc	0
 
 	ldr	r0, =SMC_CMD_L2X0SETUP2
 	ldr	r1, =0x3
 	ldr	r2, =0x7C470001
 	ldr	r3, =0xC200FFFF
-#ifdef REQUIRES_SEC
- .arch_extension sec 
-#endif
+
 	smc	0
 #else
 	ldr	r0, =EXYNOS4_PA_L2CC

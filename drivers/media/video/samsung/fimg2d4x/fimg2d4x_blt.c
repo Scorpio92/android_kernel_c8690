@@ -29,7 +29,7 @@
 #include "fimg2d_cache.h"
 #include "fimg2d_helper.h"
 
-#define BLIT_TIMEOUT	msecs_to_jiffies(2000)
+#define BLIT_TIMEOUT	msecs_to_jiffies(500)
 
 static inline void fimg2d4x_blit_wait(struct fimg2d_control *info, struct fimg2d_bltcmd *cmd)
 {
@@ -77,7 +77,8 @@ void fimg2d4x_bitblt(struct fimg2d_control *info)
 
 		if (cmd->image[IDST].addr.type != ADDR_PHYS) {
 			pgd = (unsigned long *)ctx->mm->pgd;
-			s5p_sysmmu_enable(info->dev, (unsigned long)virt_to_phys(pgd));
+			exynos_sysmmu_enable(info->dev,
+					(unsigned long)virt_to_phys(pgd));
 			fimg2d_debug("sysmmu enable: pgd %p ctx %p seq_no(%u)\n",
 					pgd, ctx, cmd->seq_no);
 		}
@@ -95,19 +96,15 @@ void fimg2d4x_bitblt(struct fimg2d_control *info)
 		perf_end(cmd->ctx, PERF_BLIT);
 #endif
 		if (cmd->image[IDST].addr.type != ADDR_PHYS) {
-			s5p_sysmmu_disable(info->dev);
+			exynos_sysmmu_disable(info->dev);
 			fimg2d_debug("sysmmu disable\n");
 		}
 blitend:
-		spin_lock(&info->bltlock);
-		fimg2d_dequeue(&cmd->node);
-		kfree(cmd);
-		atomic_dec(&ctx->ncmd);
+		fimg2d_del_command(info, cmd);
 
 		/* wake up context */
 		if (!atomic_read(&ctx->ncmd))
 			wake_up(&ctx->wait_q);
-		spin_unlock(&info->bltlock);
 	}
 
 	atomic_set(&info->active, 0);
@@ -119,6 +116,19 @@ blitend:
 #endif
 
 	fimg2d_debug("exit blitter\n");
+}
+
+static inline int is_opaque(enum color_format fmt)
+{
+	switch (fmt) {
+	case CF_ARGB_8888:
+	case CF_ARGB_1555:
+	case CF_ARGB_4444:
+		return 0;
+
+	default:
+		return 1;
+	}
 }
 
 static int fast_op(struct fimg2d_bltcmd *cmd)

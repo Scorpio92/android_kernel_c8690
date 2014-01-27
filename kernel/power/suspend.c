@@ -23,7 +23,6 @@
 #include <linux/slab.h>
 #include <linux/suspend.h>
 #include <linux/syscore_ops.h>
-#include <linux/ftrace.h>
 #include <trace/events/power.h>
 
 #include "power.h"
@@ -129,24 +128,15 @@ void __attribute__ ((weak)) arch_suspend_enable_irqs(void)
 	local_irq_enable();
 }
 
-#if !defined(CONFIG_CPU_EXYNOS4210)
-#define CHECK_POINT printk(KERN_DEBUG "%s:%d\n", __func__, __LINE__)
-#else
-#define CHECK_POINT
-#endif
-
 /**
- * suspend_enter - enter the desired system sleep state.
- * @state: State to enter
- * @wakeup: Returns information that suspend should not be entered again.
+ *	suspend_enter - enter the desired system sleep state.
+ *	@state:		state to enter
  *
- * This function should be called after devices have been suspended.
+ *	This function should be called after devices have been suspended.
  */
-static int suspend_enter(suspend_state_t state, bool *wakeup)
+static int suspend_enter(suspend_state_t state)
 {
 	int error;
-
-	CHECK_POINT;
 
 	if (suspend_ops->prepare) {
 		error = suspend_ops->prepare();
@@ -154,15 +144,11 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 			goto Platform_finish;
 	}
 
-	CHECK_POINT;
-
 	error = dpm_suspend_noirq(PMSG_SUSPEND);
 	if (error) {
 		printk(KERN_ERR "PM: Some devices failed to power down\n");
 		goto Platform_finish;
 	}
-
-	CHECK_POINT;
 
 	if (suspend_ops->prepare_late) {
 		error = suspend_ops->prepare_late();
@@ -177,18 +163,12 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 	if (error || suspend_test(TEST_CPUS))
 		goto Enable_cpus;
 
-	CHECK_POINT;
-
 	arch_suspend_disable_irqs();
 	BUG_ON(!irqs_disabled());
 
 	error = syscore_suspend();
-
-	CHECK_POINT;
-
 	if (!error) {
-		*wakeup = pm_wakeup_pending();
-		if (!(suspend_test(TEST_CORE) || *wakeup)) {
+		if (!(suspend_test(TEST_CORE) || pm_wakeup_pending())) {
 			error = suspend_ops->enter(state);
 			events_check_enabled = false;
 		}
@@ -222,7 +202,6 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 int suspend_devices_and_enter(suspend_state_t state)
 {
 	int error;
-	bool wakeup = false;
 
 	if (!suspend_ops)
 		return -ENOSYS;
@@ -234,7 +213,6 @@ int suspend_devices_and_enter(suspend_state_t state)
 			goto Close;
 	}
 	suspend_console();
-	ftrace_stop();
 	suspend_test_start();
 	error = dpm_suspend_start(PMSG_SUSPEND);
 	if (error) {
@@ -245,16 +223,12 @@ int suspend_devices_and_enter(suspend_state_t state)
 	if (suspend_test(TEST_DEVICES))
 		goto Recover_platform;
 
-	do {
-		error = suspend_enter(state, &wakeup);
-	} while (!error && !wakeup
-		&& suspend_ops->suspend_again && suspend_ops->suspend_again());
+	error = suspend_enter(state);
 
  Resume_devices:
 	suspend_test_start();
 	dpm_resume_end(PMSG_RESUME);
 	suspend_test_finish("resume devices");
-	ftrace_start();
 	resume_console();
  Close:
 	if (suspend_ops->end)
@@ -282,40 +256,6 @@ static void suspend_finish(void)
 	pm_restore_console();
 }
 
-#ifdef CONFIG_PM_WATCHDOG_TIMEOUT
-void pm_wd_timeout(unsigned long data)
-{
-	struct pm_wd_data *wd_data = (void *)data;
-	struct task_struct *tsk = wd_data->tsk;
-
-	pr_emerg("%s: PM watchdog timeout: %d seconds\n",  __func__,
-			wd_data->timeout);
-
-	pr_emerg("stack:\n");
-	show_stack(tsk, NULL);
-
-	BUG();
-}
-
-void pm_wd_add_timer(struct timer_list *timer, struct pm_wd_data *data,
-			int timeout)
-{
-	data->timeout = timeout;
-	data->tsk = get_current();
-	init_timer_on_stack(timer);
-	timer->expires = jiffies + HZ * data->timeout;
-	timer->function = pm_wd_timeout;
-	timer->data = (unsigned long)data;
-	add_timer(timer);
-}
-
-void pm_wd_del_timer(struct timer_list *timer)
-{
-	del_timer_sync(timer);
-	destroy_timer_on_stack(timer);
-}
-#endif
-
 /**
  *	enter_state - Do common work of entering low-power state.
  *	@state:		pm_state structure for state we're entering.
@@ -332,8 +272,6 @@ u8 suspended_flag = 0;
 int enter_state(suspend_state_t state)
 {
 	int error;
-	struct timer_list timer;
-	struct pm_wd_data data;
 
 	if (!valid_state(state))
 		return -ENODEV;
@@ -355,18 +293,18 @@ int enter_state(suspend_state_t state)
 
 	pr_debug("PM: Entering %s sleep\n", pm_states[state]);
 	pm_restrict_gfp_mask();
+
 	suspending_flag = 1;
+	printk("******,do not response to host wakeup irq: %s!!!\n",__func__);
 	error = suspend_devices_and_enter(state);
 	suspended_flag = 1 ;
 	pm_restore_gfp_mask();
 
  Finish:
-	pm_wd_add_timer(&timer, &data, 15);
-
 	pr_debug("PM: Finishing wakeup.\n");
 	suspend_finish();
 	suspending_flag = 0;
-	pm_wd_del_timer(&timer);
+	printk("#####response to host wakeup irq: %s!!!\n",__func__);
  Unlock:
 	mutex_unlock(&pm_mutex);
 	return error;

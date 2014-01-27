@@ -25,7 +25,6 @@
 #include <linux/task_io_accounting_ops.h>
 #include <linux/blkdev.h>
 #include <linux/mpage.h>
-#include <linux/earlysuspend.h>
 #include <linux/rmap.h>
 #include <linux/percpu.h>
 #include <linux/notifier.h>
@@ -62,7 +61,7 @@ static inline long sync_writeback_pages(unsigned long dirtied)
 /*
  * Start background writeback (via writeback threads) at this percentage
  */
-int dirty_background_ratio = 10;
+int dirty_background_ratio = 45;
 
 /*
  * dirty_background_bytes starts at 0 (disabled) so that it is a function of
@@ -79,7 +78,7 @@ int vm_highmem_is_dirtyable;
 /*
  * The generator of dirty data starts writeback at this percentage
  */
-int vm_dirty_ratio = 20;
+int vm_dirty_ratio = 90;
 
 /*
  * vm_dirty_bytes starts at 0 (disabled) so that it is a function of
@@ -90,7 +89,7 @@ unsigned long vm_dirty_bytes;
 /*
  * The interval between `kupdate'-style writebacks
  */
-unsigned int dirty_writeback_interval = 0; /* centiseconds */
+unsigned int dirty_writeback_interval = 5 * 100; /* centiseconds */
 
 /*
  * The longest time for which data is allowed to remain dirty
@@ -420,8 +419,16 @@ void global_dirty_limits(unsigned long *pbackground, unsigned long *pdirty)
 	if (vm_dirty_bytes)
 		dirty = DIV_ROUND_UP(vm_dirty_bytes, PAGE_SIZE);
 	else
-		dirty = (vm_dirty_ratio * available_memory) / 100;
-
+// Cellon add start, Ted Shi, 2012/10/22, for UMS read write too low
+	{
+		int dirty_ratio;
+		dirty_ratio = vm_dirty_ratio;
+		if (dirty_ratio < 5)
+			dirty_ratio = 5;
+//		dirty = (vm_dirty_ratio * available_memory) / 100;
+		dirty = (dirty_ratio * available_memory) / 100;
+	}
+// Cellon add end, Ted Shi, 2012/10/22
 	if (dirty_background_bytes)
 		background = DIV_ROUND_UP(dirty_background_bytes, PAGE_SIZE);
 	else
@@ -773,19 +780,6 @@ static struct notifier_block __cpuinitdata ratelimit_nb = {
 	.next		= NULL,
 };
 
-static void dirty_early_suspend(struct early_suspend *handler) 
-{
-  dirty_writeback_interval = 5 * 100;
-}
-static void dirty_late_resume(struct early_suspend *handler)
-{
-  dirty_writeback_interval = 0;
-}
-
-static struct early_suspend dirty_suspend = {
-  .suspend = dirty_early_suspend,
-  .resume = dirty_late_resume,
-}; 
 /*
  * Called early on to tune the page writeback dirty limits.
  *
@@ -808,7 +802,6 @@ void __init page_writeback_init(void)
 {
 	int shift;
 
-	register_early_suspend(&dirty_suspend);
 	writeback_set_ratelimit();
 	register_cpu_notifier(&ratelimit_nb);
 

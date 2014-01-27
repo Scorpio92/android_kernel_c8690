@@ -149,7 +149,6 @@ extern int do_one_initcall(initcall_t fn);
 extern char __initdata boot_command_line[];
 extern char *saved_command_line;
 extern unsigned int reset_devices;
-extern unsigned int rom_feature_set;
 
 /* used by init/main.c */
 void setup_arch(char **);
@@ -200,6 +199,10 @@ extern int initcall_debug;
 #define postcore_initcall_sync(fn)	__define_initcall("2s",fn,2s)
 #define arch_initcall(fn)		__define_initcall("3",fn,3)
 #define arch_initcall_sync(fn)		__define_initcall("3s",fn,3s)
+#ifdef CONFIG_FAST_RESUME
+#define beforeresume_initcall(fn)	__define_initcall("bresume",fn,bresume)
+#define resume_initcall(fn)		__define_initcall("resume",fn,resume)
+#endif
 #define subsys_initcall(fn)		__define_initcall("4",fn,4)
 #define subsys_initcall_sync(fn)	__define_initcall("4s",fn,4s)
 #define fs_initcall(fn)			__define_initcall("5",fn,5)

@@ -7,7 +7,6 @@
 
 #include <linux/compiler.h>
 #include <linux/types.h>
-#include <linux/rcupdate.h>
 
 #ifdef __KERNEL__
 #include <asm/atomic.h>

@@ -706,9 +706,7 @@ static int bluesleep_write_proc_proto(struct file *file, const char *buffer,
 	return count;
 }
 
-// Fixes linaro 4.7 compile 
-// static int __init bluesleep_probe(struct platform_device *pdev)
-static int  bluesleep_probe(struct platform_device *pdev)
+static int __init bluesleep_probe(struct platform_device *pdev)
 {
 	int ret;
 	struct resource *res;

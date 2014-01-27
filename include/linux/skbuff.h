@@ -511,8 +511,8 @@ extern struct sk_buff *skb_clone(struct sk_buff *skb,
 				 gfp_t priority);
 extern struct sk_buff *skb_copy(const struct sk_buff *skb,
 				gfp_t priority);
-extern struct sk_buff *__pskb_copy(struct sk_buff *skb,
-				 int headroom, gfp_t gfp_mask);
+extern struct sk_buff *pskb_copy(struct sk_buff *skb,
+				 gfp_t gfp_mask);
 extern int	       pskb_expand_head(struct sk_buff *skb,
 					int nhead, int ntail,
 					gfp_t gfp_mask);
@@ -1614,12 +1614,6 @@ static inline void netdev_free_page(struct net_device *dev, struct page *page)
 	__free_page(page);
 }
 
-static inline struct sk_buff *pskb_copy(struct sk_buff *skb,
-					gfp_t gfp_mask)
-{
-	return __pskb_copy(skb, skb_headroom(skb), gfp_mask);
-}
-
 /**
  *	skb_clone_writable - is the header of a clone writable
  *	@skb: buffer to check
@@ -1639,6 +1633,8 @@ static inline int __skb_cow(struct sk_buff *skb, unsigned int headroom,
 {
 	int delta = 0;
 
+	if (headroom < NET_SKB_PAD)
+		headroom = NET_SKB_PAD;
 	if (headroom > skb_headroom(skb))
 		delta = headroom - skb_headroom(skb);
 
@@ -2138,14 +2134,6 @@ static inline void nf_reset(struct sk_buff *skb)
 #ifdef CONFIG_BRIDGE_NETFILTER
 	nf_bridge_put(skb->nf_bridge);
 	skb->nf_bridge = NULL;
-#endif
-}
-
-static inline void nf_reset_trace(struct sk_buff *skb)
-{
-#if defined(CONFIG_NETFILTER_XT_TARGET_TRACE) || \
-	defined(CONFIG_NETFILTER_XT_TARGET_TRACE_MODULE)
-	skb->nf_trace = 0;
 #endif
 }
 

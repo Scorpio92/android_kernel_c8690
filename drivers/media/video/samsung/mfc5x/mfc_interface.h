@@ -131,12 +131,16 @@ struct mfc_enc_init_common_arg {
 	int in_frame_map;
 
 	unsigned int in_pixelcache;
-
 	unsigned int in_mapped_addr;
+
 	struct mfc_strm_ref_buf_arg out_u_addr;
 	struct mfc_strm_ref_buf_arg out_p_addr;
 	struct mfc_strm_ref_buf_arg out_buf_size;
 	unsigned int out_header_size;
+
+#if SUPPORT_SLICE_ENCODING
+	unsigned int in_output_mode;
+#endif
 };
 
 struct mfc_enc_init_h263_arg {
@@ -238,6 +242,9 @@ struct mfc_enc_exe_arg {
 	unsigned int out_y_cookie;
 	unsigned int out_c_cookie;
 #endif
+#ifdef CONFIG_SLP_DMABUF
+	SSBSIP_MFC_MEMORY_TYPE memory_type;     /* [OUT] memory type */
+#endif
 };
 
 struct mfc_dec_init_arg {
@@ -307,6 +314,9 @@ struct mfc_dec_exe_arg {
 #elif defined(CONFIG_S5P_VMEM)
 	unsigned int out_y_cookie;
 	unsigned int out_c_cookie;
+#endif
+#ifdef CONFIG_SLP_DMABUF
+	SSBSIP_MFC_MEMORY_TYPE memory_type;     /* [OUT] memory type */
 #endif
 	int out_img_width;	/* [OUT] width	of YUV420 frame */
 	int out_img_height;	/* [OUT] height of YUV420 frame */
@@ -485,10 +495,14 @@ typedef struct
 	unsigned int dec_pixelcache;
 	unsigned int dec_slice;
 	unsigned int dec_numextradpb;
+	unsigned int dec_packedPB_detect;
 
 	int input_cookie;
 	int input_secure_id;
 	int input_size;
+
+	unsigned int encode_cnt;
+	int enc_frame_map;
 } _MFCLIB;
 
 #define ENC_PROFILE_LEVEL(profile, level)      ((profile) | ((level) << 8))

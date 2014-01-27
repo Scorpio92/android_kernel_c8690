@@ -46,7 +46,7 @@
 #include "mfc_pm.h"
 
 static int mem_ports = -1;
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 static struct mfc_mem mem_infos[MFC_MAX_MEM_CHUNK_NUM];
 #else
 static struct mfc_mem mem_infos[MFC_MAX_MEM_PORT_NUM];
@@ -56,30 +56,36 @@ static struct mfc_mem mem_infos[MFC_MAX_MEM_PORT_NUM];
 static struct mfc_vcm vcm_info;
 #endif
 
-#ifndef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
-static int mfc_mem_addr_port(unsigned int addr)
+static int mfc_mem_addr_port(unsigned long addr)
 {
 	int i;
 	int port = -1;
 
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
+	for (i = 0; i < MFC_MAX_MEM_CHUNK_NUM; i++) {
+#else
 	for (i = 0; i < mem_ports; i++) {
+#endif
 		if ((addr >= mem_infos[i].base)
 		 && (addr < (mem_infos[i].base + mem_infos[i].size))) {
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
+			port = 0;
+#else
 			port = i;
+#endif
 			break;
 		}
 	}
 
 	return port;
 }
-#endif
 
 int mfc_mem_count(void)
 {
 	return mem_ports;
 }
 
-unsigned int mfc_mem_base(int port)
+unsigned long mfc_mem_base(int port)
 {
 	if ((port < 0) || (port >= mem_ports))
 		return 0;
@@ -95,11 +101,11 @@ unsigned char *mfc_mem_addr(int port)
 	return mem_infos[port].addr;
 }
 
-unsigned int mfc_mem_data_base(int port)
+unsigned long mfc_mem_data_base(int port)
 {
-	unsigned int addr;
+	unsigned long addr;
 
-#ifndef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifndef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	if ((port < 0) || (port >= mem_ports))
 		return 0;
 #endif
@@ -115,7 +121,7 @@ unsigned int mfc_mem_data_size(int port)
 {
 	unsigned int size;
 
-#ifndef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifndef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	if ((port < 0) || (port >= mem_ports))
 		return 0;
 #endif
@@ -127,25 +133,24 @@ unsigned int mfc_mem_data_size(int port)
 	return size;
 }
 
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 unsigned int mfc_mem_hole_size(void)
 {
-	return mfc_mem_data_base(1) -
-		(mfc_mem_data_base(0) + mfc_mem_data_size(0));
+	if (mfc_mem_data_size(1))
+		return mfc_mem_data_base(1) -
+			(mfc_mem_data_base(0) + mfc_mem_data_size(0));
+	else
+		return 0;
 }
 #endif
 
-unsigned int mfc_mem_data_ofs(unsigned int addr, int contig)
+unsigned long mfc_mem_data_ofs(unsigned long addr, int contig)
 {
 	unsigned int offset;
 	int i;
 	int port;
 
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
-	port = 0;
-#else
 	port = mfc_mem_addr_port(addr);
-#endif
 	if (port < 0)
 		return 0;
 
@@ -159,28 +164,56 @@ unsigned int mfc_mem_data_ofs(unsigned int addr, int contig)
 	return offset;
 }
 
-unsigned int mfc_mem_base_ofs(unsigned int addr)
+unsigned long mfc_mem_base_ofs(unsigned long addr)
 {
 	int port;
 
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
-	port = 0;
-#else
 	port = mfc_mem_addr_port(addr);
-#endif
 	if (port < 0)
 		return 0;
 
 	return addr - mem_infos[port].base;
 }
 
-unsigned int mfc_mem_addr_ofs(unsigned int ofs, int port)
+unsigned long mfc_mem_addr_ofs(unsigned long ofs, int from)
 {
-	/* FIXME: right position? */
-	if (port > (mfc_mem_count() - 1))
-		port = mfc_mem_count() - 1;
+	if (from >= mem_ports)
+		from = mem_ports - 1;
 
-	return mem_infos[port].base + ofs;
+	return mem_infos[from].base + ofs;
+}
+
+long mfc_mem_ext_ofs(unsigned long addr, unsigned int size, int from)
+{
+	int port;
+	long ofs;
+
+	if (from >= mem_ports)
+		from = mem_ports - 1;
+
+	port = mfc_mem_addr_port(addr);
+	if (port < 0) {
+		mfc_dbg("given address is out of MFC: "
+			"0x%08lx\n", addr);
+		port = from;
+	} else if (port != from) {
+		mfc_warn("given address is in the port#%d [%d]",
+			port, from);
+		port = from;
+	}
+
+	ofs = addr - mem_infos[port].base;
+
+	if ((ofs < 0) || (ofs >= MAX_MEM_OFFSET)) {
+		mfc_err("given address cannot access by MFC: "
+			"0x%08lx\n", addr);
+		ofs = -MAX_MEM_OFFSET;
+	} else if ((ofs + size) > MAX_MEM_OFFSET) {
+		mfc_warn("some part of given address cannot access: "
+			"0x%08lx\n", addr);
+	}
+
+	return ofs;
 }
 
 #ifdef SYSMMU_MFC_ON
@@ -348,22 +381,22 @@ void mfc_mem_cache_inv(const void *start_addr, unsigned long size)
 static void mfc_tlb_invalidate(enum vcm_dev_id id)
 {
 	if (mfc_power_chk()) {
-		mfc_clock_on();
+		/*mfc_clock_on();*/
 
 		s5p_sysmmu_tlb_invalidate(NULL);
 
-		mfc_clock_off();
+		/*mfc_clock_off();*/
 	}
 }
 
 static void mfc_set_pagetable(enum vcm_dev_id id, unsigned long base)
 {
 	if (mfc_power_chk()) {
-		mfc_clock_on();
+		/*mfc_clock_on();*/
 
 		s5p_sysmmu_set_tablebase_pgd(NULL, base);
 
-		mfc_clock_off();
+		/*mfc_clock_off();*/
 	}
 }
 
@@ -390,7 +423,7 @@ int mfc_init_mem_mgr(struct mfc_dev *dev)
 #endif
 #ifdef CONFIG_S5P_MEM_CMA
 	struct cma_info cma_infos[2];
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	size_t bound_size;
 	size_t available_size;
 	size_t hole_size;
@@ -517,11 +550,24 @@ int mfc_init_mem_mgr(struct mfc_dev *dev)
 #else	/* not SYSMMU_MFC_ON */
 	/* early allocator */
 #if defined(CONFIG_S5P_MEM_CMA)
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef  CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
+#if defined(CONFIG_USE_MFC_CMA) && defined(CONFIG_MACH_M0)
+	cma_infos[0].lower_bound = 0x5C100000;
+	cma_infos[0].upper_bound = 0x5F200000;
+	cma_infos[0].total_size  = 0x03100000;
+	cma_infos[0].free_size   = 0x03100000;
+	cma_infos[0].count   = 1;
+#else
 	if (cma_info(&cma_infos[0], dev->device, "A")) {
 		mfc_info("failed to get CMA info of 'mfc-secure'\n");
 		return -ENOMEM;
 	}
+#endif
+	printk(KERN_INFO "%s[%d] cma 0x%x 0x%x 0x%x 0x%x %u\n",
+		 __func__, __LINE__,
+		(int)cma_infos[0].lower_bound, (int)cma_infos[0].upper_bound,
+		(int)cma_infos[0].total_size, (int)cma_infos[0].free_size,
+		cma_infos[0].count);
 
 	if (cma_info(&cma_infos[1], dev->device, "B")) {
 		mfc_info("failed to get CMA info of 'mfc-normal'\n");
@@ -565,6 +611,15 @@ int mfc_init_mem_mgr(struct mfc_dev *dev)
 		return -ENOMEM;
 	}
 
+#if defined(CONFIG_USE_MFC_CMA) && defined(CONFIG_MACH_M0)
+	base[0] = 0x5c100000;
+	dev->mem_infos[0].base = base[0];
+	dev->mem_infos[0].size = size;
+	dev->mem_infos[0].addr = phys_to_virt(base[0]);
+	mfc_info("%s[%d]: base 0x%x, size 0x%x, addr 0x%x\n",
+			__func__, __LINE__, (int)base[0], (int)size,
+			(int)dev->mem_infos[0].addr);
+#else
 	base[0] = cma_alloc(dev->device, "A", size, ALIGN_128KB);
 	if (IS_ERR_VALUE(base[0])) {
 		mfc_err("failed to get rsv. memory from CMA on mfc-secure");
@@ -574,15 +629,14 @@ int mfc_init_mem_mgr(struct mfc_dev *dev)
 	dev->mem_infos[0].base = base[0];
 	dev->mem_infos[0].size = size;
 	dev->mem_infos[0].addr = cma_get_virt(base[0], size, 0);
-
+#endif
 	available_size -= dev->mem_infos[0].size;
 	mfc_dbg("avail: 0x%08x\n", available_size);
 
 	size = MFC_MEMSIZE_DRM;
 	if (size > available_size) {
 		mfc_info("failed to allocate DRM shared area (%d:%d)\n",
-			(cma_infos[0].free_size + hole_size + MFC_MEMSIZE_DRM) >> 10,
-			MAX_MEM_OFFSET >> 10);
+			size >> 10, available_size >> 10);
 		return -ENOMEM;
 	}
 
@@ -600,26 +654,28 @@ int mfc_init_mem_mgr(struct mfc_dev *dev)
 	available_size -= dev->drm_info.size;
 	mfc_dbg("avail: 0x%08x\n", available_size);
 
-	size = cma_infos[1].free_size - MFC_MEMSIZE_DRM;
-	if (size > available_size) {
-		mfc_warn("<Warning> large hole between reserved memory, "
-			"'mfc-normal' size will be shrink (%d:%d)\n",
-			size >> 10,
-			available_size >> 10);
-		size = available_size;
-	}
+	if (available_size > 0) {
+		size = cma_infos[1].free_size - MFC_MEMSIZE_DRM;
+		if (size > available_size) {
+			mfc_warn("<Warning> large hole between reserved memory, "
+				"'mfc-normal' size will be shrink (%d:%d)\n",
+					size >> 10,
+					available_size >> 10);
+			size = available_size;
+		}
 
-	base[2] = cma_alloc(dev->device, "B", size, ALIGN_128KB);
-	if (IS_ERR_VALUE(base[2])) {
-		mfc_err("failed to get rsv. memory from CMA on mfc-normal");
-		cma_free(base[1]);
-		cma_free(base[0]);
-		return -ENOMEM;
-	}
+		base[2] = cma_alloc(dev->device, "B", size, ALIGN_128KB);
+		if (IS_ERR_VALUE(base[2])) {
+			mfc_err("failed to get rsv. memory from CMA on mfc-normal");
+			cma_free(base[1]);
+			cma_free(base[0]);
+			return -ENOMEM;
+		}
 
-	dev->mem_infos[1].base = base[2];
-	dev->mem_infos[1].size = size;
-	dev->mem_infos[1].addr = cma_get_virt(base[2], size, 0);
+		dev->mem_infos[1].base = base[2];
+		dev->mem_infos[1].size = size;
+		dev->mem_infos[1].addr = cma_get_virt(base[2], size, 0);
+	}
 #else
 	if (dev->mem_ports == 1) {
 		if (cma_info(&cma_infos[0], dev->device, "AB")) {
@@ -636,7 +692,12 @@ int mfc_init_mem_mgr(struct mfc_dev *dev)
 			size = MAX_MEM_OFFSET;
 		}
 
+#ifdef CONFIG_SLP
+		base[0] = cma_alloc(dev->device, "AB", MFC_FW_SYSTEM_SIZE,
+			ALIGN_128KB);
+#else
 		base[0] = cma_alloc(dev->device, "AB", size, ALIGN_128KB);
+#endif
 		if (IS_ERR_VALUE(base[0])) {
 			mfc_err("failed to get rsv. memory from CMA");
 			return -ENOMEM;
@@ -668,7 +729,12 @@ int mfc_init_mem_mgr(struct mfc_dev *dev)
 			size = MAX_MEM_OFFSET;
 		}
 
+#ifdef CONFIG_SLP
+		base[0] = cma_alloc(dev->device, cma_index ? "B" : "A",
+			MFC_FW_SYSTEM_SIZE, ALIGN_128KB);
+#else
 		base[0] = cma_alloc(dev->device, cma_index ? "B" : "A", size, ALIGN_128KB);
+#endif
 		if (IS_ERR_VALUE(base[0])) {
 			mfc_err("failed to get rsv. memory from CMA on port #0");
 			return -ENOMEM;
@@ -685,12 +751,17 @@ int mfc_init_mem_mgr(struct mfc_dev *dev)
 		if (size > MAX_MEM_OFFSET) {
 			mfc_warn("<Warning> too large 'mfc%d' reserved memory, "
 				"size will be shrink (%d:%d)\n",
-				cma_index, size >> 10,
-				MAX_MEM_OFFSET >> 10);
+					cma_index, size >> 10,
+					MAX_MEM_OFFSET >> 10);
 			size = MAX_MEM_OFFSET;
 		}
 
+#ifdef CONFIG_SLP
+		base[1] = cma_index ? cma_infos[1].lower_bound :
+			cma_infos[0].lower_bound;
+#else
 		base[1] = cma_alloc(dev->device, cma_index ? "B" : "A", size, ALIGN_128KB);
+#endif
 		if (IS_ERR_VALUE(base[1])) {
 			mfc_err("failed to get rsv. memory from CMA on port #1");
 			cma_free(base[0]);
@@ -740,7 +811,7 @@ int mfc_init_mem_mgr(struct mfc_dev *dev)
 #endif	/* end of SYSMMU_MFC_ON */
 
 	mem_ports = dev->mem_ports;
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	for (i = 0; i < MFC_MAX_MEM_CHUNK_NUM; i++)
 		memcpy(&mem_infos[i], &dev->mem_infos[i], sizeof(struct mfc_mem));
 #else
@@ -779,7 +850,7 @@ void mfc_vcm_dump_res(struct vcm_res *res)
 	mfc_dbg("\tphys : 0x%08x, bound_size: 0x%08x\n", (unsigned int)res->phys, (unsigned int)res->bound_size);
 }
 
-struct vcm_mmu_res *mfc_vcm_bind(unsigned int addr, unsigned int size)
+struct vcm_mmu_res *mfc_vcm_bind(unsigned long addr, unsigned int size)
 {
 	struct vcm_mmu_res *s_res;
 	struct vcm_phys *phys;
