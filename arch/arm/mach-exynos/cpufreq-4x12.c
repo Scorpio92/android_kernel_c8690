@@ -167,7 +167,7 @@ static unsigned int clkdiv_cpu0_4412[CPUFREQ_LEVEL_END][8] = {
 	{ 0, 4, 7, 0, 7, 1, 7, 0 },
 
 	/* ARM L3: 1600Mhz */
-	{ 0, 4, 7, 0, 6, 1, 7, 0 },
+	{ 0, 3, 7, 0, 6, 1, 7, 0 },
 
 	/* ARM L4: 1500Mhz */
 	{ 0, 3, 7, 0, 6, 1, 7, 0 },
@@ -223,7 +223,7 @@ static unsigned int clkdiv_cpu0_4412[CPUFREQ_LEVEL_END][8] = {
 	{ 0, 4, 7, 0, 7, 1, 7, 0 },
 
 	/* ARM L3: 1600Mhz */
-	{ 0, 4, 7, 0, 6, 1, 7, 0 },
+	{ 0, 3, 7, 0, 6, 1, 7, 0 },
 
 	/* ARM L4: 1500Mhz */
 	{ 0, 3, 7, 0, 6, 1, 7, 0 },
