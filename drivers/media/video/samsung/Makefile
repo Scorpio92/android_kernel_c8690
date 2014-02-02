@@ -7,11 +7,11 @@ endif
 obj-$(CONFIG_VIDEO_JPEG)	+= jpeg/
 
 #костыль для сохранения фоток на хайскрине
-ifeq ($(CONFIG_VIDEO_S5K3H7),y)
+#ifeq ($(CONFIG_VIDEO_S5K3H7),y)
 obj-$(CONFIG_VIDEO_JPEG_V2X)	+= jpeg_v2x-old/
-else
-obj-$(CONFIG_VIDEO_JPEG_V2X)	+= jpeg_v2x/
-endif
+#else
+#obj-$(CONFIG_VIDEO_JPEG_V2X)	+= jpeg_v2x/ #на ньюмане не работает фронталка из-за этого
+#endif
 #end
 
 obj-$(CONFIG_VIDEO_MFC5X)	+= mfc5x/
