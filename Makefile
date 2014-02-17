@@ -372,13 +372,11 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -Werror-implicit-function-declaration \
 		   -Wno-format-security \
 		   -fno-delete-null-pointer-checks \
-			 -pipe \
-			 -ffast-math \
-			 -march=armv7-a \
-			 -mtune=cortex-a9 \
-			 -mfpu=neon \
-			 -fsingle-precision-constant \
-			 -fgcse-lm -fgcse-sm -fsched-spec-load -fforce-addr
+		   -pipe \
+		   -ffast-math \
+		   -mfpu=neon \
+		   -march=armv7-a \
+		   -mtune=cortex-a9
 
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 	KBUILD_CFLAGS += -Os
@@ -387,7 +385,7 @@ ifdef CONFIG_CC_OPTIMIZE_DEFAULT
 	KBUILD_CFLAGS += -O2
 endif
 ifdef CONFIG_CC_OPTIMIZE_MORE
-	KBUILD_CFLAGS += -O3 -fmodulo-sched -fmodulo-sched-allow-regmoves -fno-tree-vectorize
+	KBUILD_CFLAGS += -O2 -fmodulo-sched -fmodulo-sched-allow-regmoves -fno-tree-vectorize
 endif
 
 KBUILD_AFLAGS_KERNEL :=
