@@ -48,7 +48,7 @@
 #include <plat/gpio-cfg.h>
 #include <plat/cpu.h>
 
-#define UP_THRESHOLD			30
+#define UP_THRESHOLD			23
 #define IDLE_THRESHOLD			4
 #define UP_CPU_THRESHOLD		11
 #define MAX_CPU_THRESHOLD		20
