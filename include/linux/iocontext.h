@@ -1,6 +1,7 @@
 #ifndef IOCONTEXT_H
 #define IOCONTEXT_H
 
+#include <linux/bitmap.h>
 #include <linux/radix-tree.h>
 #include <linux/rcupdate.h>
 
@@ -31,6 +32,13 @@ struct cfq_io_context {
  * I/O subsystem state of the associated processes.  It is refcounted
  * and kmalloc'ed. These could be shared between processes.
  */
+
+enum {
+	IOC_CFQ_IOPRIO_CHANGED,
+	IOC_BFQ_IOPRIO_CHANGED,
+	IOC_IOPRIO_CHANGED_BITS
+};
+
 struct io_context {
 	atomic_long_t refcount;
 	atomic_t nr_tasks;
@@ -39,7 +47,7 @@ struct io_context {
 	spinlock_t lock;
 
 	unsigned short ioprio;
-	unsigned short ioprio_changed;
+	DECLARE_BITMAP(ioprio_changed, IOC_IOPRIO_CHANGED_BITS);
 
 #if defined(CONFIG_BLK_CGROUP) || defined(CONFIG_BLK_CGROUP_MODULE)
 	unsigned short cgroup_changed;
@@ -53,6 +61,8 @@ struct io_context {
 
 	struct radix_tree_root radix_root;
 	struct hlist_head cic_list;
+	struct radix_tree_root bfq_radix_root;
+	struct hlist_head bfq_cic_list;
 	void __rcu *ioc_data;
 };
 

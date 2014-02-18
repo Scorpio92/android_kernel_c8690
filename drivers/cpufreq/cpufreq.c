@@ -32,6 +32,8 @@
 
 #include <trace/events/power.h>
 
+static char scaling_sched_screen_off_sel_prev[16];
+
 /**
  * The "cpufreq driver" - the arch- or hardware-dependent low
  * level driver of CPUFreq support, and its spinlock. This lock
@@ -1891,6 +1893,12 @@ int cpufreq_unregister_driver(struct cpufreq_driver *driver)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(cpufreq_unregister_driver);
+
+void set_cur_sched(const char *name)
+{
+	unsigned int ret = -EINVAL;
+	ret = sscanf(name, "%15s", scaling_sched_screen_off_sel_prev);
+}
 
 static int __init cpufreq_core_init(void)
 {
