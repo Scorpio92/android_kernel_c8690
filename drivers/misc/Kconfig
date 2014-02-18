@@ -618,4 +618,10 @@ config AKM8963C_USE_I2C5
 	depends on I2C && I2C_S3C2410
 	help 
 		no
+
+config MALI_CONTROL
+	tristate "mali gpu control interfaces"
+	depends on VIDEO_MALI400MP
+	default y
+
 endif # MISC_DEVICES
