@@ -1,0 +1,21 @@
+menu "Kernel Optimization Options"
+
+config CC_OPTIMIZE_FOR_SIZE
+	bool "CC_OPTIMIZE_FOR_SIZE"
+	default y
+
+config CC_OPTIMIZE_DEFAULT
+	bool "CC_OPTIMIZE_DEFAULT"
+	default n
+
+config CC_OPTIMIZE_MORE
+	bool "CC_OPTIMIZE_MORE"
+	default y
+
+config FSYNC_OFF
+    bool "Disable filesystem FSync() function"
+    help
+      Disable the FSync() file system command.  This will improve IO performance
+      at the cost of a small risk to data integrity
+
+endmenu

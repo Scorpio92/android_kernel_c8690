@@ -1,7 +1,7 @@
 VERSION = 3
 PATCHLEVEL = 0
 SUBLEVEL = 31
-EXTRAVERSION =
+EXTRAVERSION = .666
 NAME = Sneaky Weasel
 
 # *DOCUMENTATION*
@@ -350,7 +350,7 @@ CHECK		= sparse
 
 CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 		  -Wbitwise -Wno-return-void $(CF)
-CFLAGS_MODULE   =
+CFLAGS_MODULE   = -funswitch-loops -fpredictive-commoning -fgcse-after-reload -ftree-vectorize -fipa-cp-clone -fsingle-precision-constant -pipe
 AFLAGS_MODULE   =
 LDFLAGS_MODULE  =
 CFLAGS_KERNEL	=
@@ -371,7 +371,23 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common \
 		   -Werror-implicit-function-declaration \
 		   -Wno-format-security \
-		   -fno-delete-null-pointer-checks
+		   -fno-delete-null-pointer-checks \
+		   -pipe \
+		   -ffast-math \
+		   -mfpu=neon \
+		   -march=armv7-a \
+		   -mtune=cortex-a9
+
+ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
+	KBUILD_CFLAGS += -Os
+endif
+ifdef CONFIG_CC_OPTIMIZE_DEFAULT
+	KBUILD_CFLAGS += -O2
+endif
+ifdef CONFIG_CC_OPTIMIZE_MORE
+	KBUILD_CFLAGS += -O2 -fmodulo-sched -fmodulo-sched-allow-regmoves -fno-tree-vectorize
+endif
+
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
 KBUILD_AFLAGS   := -D__ASSEMBLY__

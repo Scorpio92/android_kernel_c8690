@@ -118,6 +118,7 @@ static int is_exynos_mem_available(phys_addr_t start, size_t length)
 
 struct exynos_mem {
 	bool cacheable;
+	unsigned int  phybase;
 };
 
 int exynos_mem_open(struct inode *inode, struct file *filp)
@@ -178,7 +179,7 @@ static void cache_maint_phys(phys_addr_t start, size_t length, enum cacheop op)
 	}
 	/* end */
 
-	if (!soc_is_exynos5250()) {
+	if (!soc_is_exynos5250() && !soc_is_exynos5210()) {
 		if (length > (size_t) L1_FLUSH_ALL) {
 			flush_cache_all();
 			smp_call_function(
@@ -235,6 +236,26 @@ outer_cache_ops:
 	}
 }
 
+static void exynos_mem_paddr_cache_clean(dma_addr_t start, size_t length)
+{
+	if (length > (size_t) L2_FLUSH_ALL) {
+		flush_cache_all();		/* L1 */
+		smp_call_function((smp_call_func_t)__cpuc_flush_kern_all, NULL, 1);
+		outer_clean_all();		/* L2 */
+	} else if (length > (size_t) L1_FLUSH_ALL) {
+		dma_addr_t end = start + length - 1;
+
+		flush_cache_all();		/* L1 */
+		smp_call_function((smp_call_func_t)__cpuc_flush_kern_all, NULL, 1);
+		outer_clean_range(start, end);  /* L2 */
+	} else {
+		dma_addr_t end = start + length - 1;
+
+		dmac_flush_range(phys_to_virt(start), phys_to_virt(end));
+		outer_clean_range(start, end);	/* L2 */
+	}
+}
+
 long exynos_mem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -279,6 +300,19 @@ long exynos_mem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		cache_maint_phys(range.start, range.length, EM_CLEAN);
 		break;
 	}
+	case EXYNOS_MEM_SET_PHYADDR:
+	{
+		struct exynos_mem *mem = filp->private_data;
+		int phyaddr;
+		if (get_user(phyaddr, (u32 __user *)arg)) {
+			pr_err("[%s:%d] err: EXYNOS_MEM_SET_PHYADDR\n",
+				__func__, __LINE__);
+			return -EFAULT;
+		}
+		mem->phybase = phyaddr >> PAGE_SHIFT;
+
+		break;
+	}
 
 	default:
 		pr_err("[%s:%d] error command\n", __func__, __LINE__);
@@ -302,6 +336,29 @@ static struct vm_operations_struct exynos_mem_ops = {
 	.open	= exynos_mem_mmap_open,
 	.close	= exynos_mem_mmap_close,
 };
+
+static struct simple_cma_descriptor cmad_container[CMA_REGION_COUNT];
+static int cmad_container_stored = 0;
+
+void cma_region_descriptor_add(const char *name, int start, int size)
+{
+	int i;
+
+	pr_info("[%s] adding [%s] (0x%08x)-(0x%08x)\n",
+		__func__, name, start, size);
+
+	if(cmad_container_stored == CMA_REGION_COUNT - 1)
+		return;
+
+	i = cmad_container_stored;
+
+	cmad_container[i].name = name;
+	cmad_container[i].start = start;
+	cmad_container[i].size = size;
+
+	cmad_container_stored++;
+
+}
 
 int exynos_mem_mmap(struct file *filp, struct vm_area_struct *vma)
 {

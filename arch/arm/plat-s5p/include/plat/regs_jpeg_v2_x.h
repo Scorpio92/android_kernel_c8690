@@ -18,7 +18,7 @@
 /* JPEG Codec Control Registers */
 #define S5P_JPEG_CNTL_REG		0x00
 #define S5P_JPEG_INT_EN_REG		0x04
-//#define S5P_JPEG_QTBL_REG		0x08
+#define S5P_JPEG_INT_TIMER_COUNT_REG		0x08
 #define S5P_JPEG_INT_STATUS_REG		0x0c
 #define S5P_JPEG_OUT_MEM_BASE_REG		0x10
 #define S5P_JPEG_IMG_SIZE_REG		0x14

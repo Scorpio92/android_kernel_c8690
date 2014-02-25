@@ -31,10 +31,18 @@
 #ifdef CONFIG_PM_RUNTIME
 #include <linux/clk.h>
 #endif
+#include <linux/pm_qos_params.h>
 
+#ifdef CONFIG_BUSFREQ_OPP
+#include <mach/busfreq_exynos4.h>
+#endif
+
+#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
+#include <mach/dev.h>
+#endif
 #include <plat/cpu.h>
 
-#ifdef CONFIG_BUSFREQ
+#if defined(CONFIG_BUSFREQ) || defined(CONFIG_EXYNOS4_CPUFREQ)
 #include <mach/cpufreq.h>
 #endif
 #include <mach/regs-pmu.h>
@@ -58,7 +66,10 @@
 #include <plat/sysmmu.h>
 #endif
 
-#include <mach/dev.h>
+#ifdef CONFIG_SLP_DMABUF
+#include <media/videobuf2-core.h>
+#endif
+
 #define MFC_MINOR	252
 #define MFC_FW_NAME	"mfc_fw.bin"
 
@@ -68,27 +79,109 @@ static struct proc_dir_entry *mfc_proc_entry;
 #define MFC_PROC_ROOT		"mfc"
 #define MFC_PROC_TOTAL_INSTANCE_NUMBER	"total_instance_number"
 
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_BUSFREQ
+static struct pm_qos_request_list bus_qos_pm_qos_req;
+#endif
+
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 #define MFC_DRM_MAGIC_SIZE	0x10
 #define MFC_DRM_MAGIC_CHUNK0	0x13cdbf16
 #define MFC_DRM_MAGIC_CHUNK1	0x8b803342
 #define MFC_DRM_MAGIC_CHUNK2	0x5e87f4f5
 #define MFC_DRM_MAGIC_CHUNK3	0x3bd05317
 
-static bool check_magic(unsigned char *addr)
+static int check_magic(unsigned char *addr)
 {
-	if (((u32)*(u32 *)(addr      ) == MFC_DRM_MAGIC_CHUNK0) &&
+	if (((u32)*(u32 *)(addr) == MFC_DRM_MAGIC_CHUNK0) &&
 	    ((u32)*(u32 *)(addr + 0x4) == MFC_DRM_MAGIC_CHUNK1) &&
 	    ((u32)*(u32 *)(addr + 0x8) == MFC_DRM_MAGIC_CHUNK2) &&
 	    ((u32)*(u32 *)(addr + 0xC) == MFC_DRM_MAGIC_CHUNK3))
-		return true;
+		return 0;
+	else if (((u32)*(u32 *)(addr+0x10) == MFC_DRM_MAGIC_CHUNK0) &&
+	    ((u32)*(u32 *)(addr + 0x14) == MFC_DRM_MAGIC_CHUNK1) &&
+	    ((u32)*(u32 *)(addr + 0x18) == MFC_DRM_MAGIC_CHUNK2) &&
+	    ((u32)*(u32 *)(addr + 0x1C) == MFC_DRM_MAGIC_CHUNK3))
+		return 0x10;
 	else
-		return false;
+		return -1;
 }
 
 static inline void clear_magic(unsigned char *addr)
 {
 	memset((void *)addr, 0x00, MFC_DRM_MAGIC_SIZE);
+}
+#endif
+
+#ifdef CONFIG_SLP_DMABUF
+/**
+ * _mfc_dmabuf_put() - release memory associated with
+ * a DMABUF shared buffer
+ */
+static void _mfc_dmabuf_put(struct vb2_plane *planes)
+{
+	unsigned int plane;
+
+	for (plane = 0; plane < MFC_NUM_PLANE; ++plane) {
+		void *mem_priv = planes[plane].mem_priv;
+
+		if (mem_priv) {
+			dma_buf_detach(planes[plane].dbuf,
+					planes[plane].mem_priv);
+			dma_buf_put(planes[plane].dbuf);
+			planes[plane].dbuf = NULL;
+			planes[plane].mem_priv = NULL;
+		}
+	}
+}
+
+void mfc_queue_free(struct mfc_inst_ctx *mfc_ctx)
+{
+	struct vb2_plane *planes;
+	int buffer;
+
+	for (buffer = 0; buffer < VIDEO_MAX_PLANES; ++buffer) {
+		planes = mfc_ctx->enc_planes[buffer];
+
+		if (!planes)
+			continue;
+
+		_mfc_dmabuf_put(planes);
+		kfree(planes);
+		planes = NULL;
+	}
+}
+
+int mfc_queue_alloc(struct mfc_inst_ctx *mfc_ctx)
+{
+	struct vb2_plane *planes;
+	int buffer;
+	int ret = 0;
+
+	for (buffer = 0; buffer < MFC_NUM_PLANE; ++buffer) {
+		planes = kzalloc(sizeof(struct vb2_plane), GFP_KERNEL);
+		if (!planes) {
+			printk(KERN_INFO "MFC Queue memory alloc failed\n");
+			ret = -ENOMEM;
+			goto err;
+		}
+
+		planes->mem_priv = NULL;
+		mfc_ctx->enc_planes[buffer] = planes;
+	}
+
+	for (buffer = MFC_NUM_PLANE; buffer < VIDEO_MAX_PLANES; ++buffer)
+		mfc_ctx->enc_planes[buffer] = NULL;
+
+	return ret;
+
+err:
+	for (buffer = 0; buffer < VIDEO_MAX_PLANES; buffer++) {
+		if (mfc_ctx->enc_planes[buffer] != NULL)
+			kfree(mfc_ctx->enc_planes[buffer]);
+		mfc_ctx->enc_planes[buffer] = NULL;
+	}
+
+	return ret;
 }
 #endif
 
@@ -111,7 +204,7 @@ static int mfc_open(struct inode *inode, struct file *file)
 	int ret;
 	enum mfc_ret_code retcode;
 	int inst_id;
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	struct mfc_alloc_buffer *alloc;
 #endif
 
@@ -120,13 +213,29 @@ static int mfc_open(struct inode *inode, struct file *file)
 
 	mutex_lock(&mfcdev->lock);
 
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
-	if (mfcdev->drm_playback) {
-		mfc_err("DRM playback was activated, cannot open no more instance\n");
-		ret = -EINVAL;
-		goto err_drm_playback;
+#if defined(CONFIG_USE_MFC_CMA) && defined(CONFIG_MACH_M0)
+	if (atomic_read(&mfcdev->inst_cnt) == 0) {
+		size_t size = 0x02800000;
+		mfcdev->cma_vaddr = dma_alloc_coherent(mfcdev->device, size,
+						&mfcdev->cma_dma_addr, 0);
+		if (!mfcdev->cma_vaddr) {
+			printk(KERN_ERR "%s: dma_alloc_coherent returns "
+						"-ENOMEM\n", __func__);
+			mutex_unlock(&mfcdev->lock);
+			return -ENOMEM;
+		}
+		printk(KERN_INFO "%s[%d] size 0x%x, vaddr 0x%x, base 0x%x\n",
+					 __func__, __LINE__, (int)size,
+						(int)mfcdev->cma_vaddr,
+						(int)mfcdev->cma_dma_addr);
 	}
 #endif
+
+#if SUPPORT_SLICE_ENCODING
+	mfcdev->frame_working_flag = 1;
+	mfcdev->frame_sys = 0;
+#endif
+
 	if (!mfcdev->fw.state) {
 		if (mfcdev->fw.requesting) {
 			printk(KERN_INFO "MFC F/W request is on-going, try again\n");
@@ -156,29 +265,6 @@ static int mfc_open(struct inode *inode, struct file *file)
 	}
 
 	if (atomic_read(&mfcdev->inst_cnt) == 0) {
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
-		if (check_magic(mfcdev->drm_info.addr)) {
-			mfc_dbg("DRM playback starting\n");
-
-			clear_magic(mfcdev->drm_info.addr);
-
-			mfcdev->drm_playback = 1;
-
-			mfc_set_buf_alloc_scheme(MBS_FIRST_FIT);
-		} else {
-			/* reload F/W for first instance again */
-			if (soc_is_exynos4210()) {
-				mfcdev->fw.state = mfc_load_firmware(mfcdev->fw.info->data, mfcdev->fw.info->size);
-				if (!mfcdev->fw.state) {
-					printk(KERN_ERR "failed to reload MFC F/W, MFC will not working\n");
-					ret = -ENODEV;
-					goto err_fw_state;
-				} else {
-					printk(KERN_INFO "MFC F/W reloaded successfully (size: %d)\n", mfcdev->fw.info->size);
-				}
-			}
-		}
-#else
 		/* reload F/W for first instance again */
 		if (soc_is_exynos4210()) {
 			mfcdev->fw.state = mfc_load_firmware(mfcdev->fw.info->data, mfcdev->fw.info->size);
@@ -190,7 +276,14 @@ static int mfc_open(struct inode *inode, struct file *file)
 				printk(KERN_INFO "MFC F/W reloaded successfully (size: %d)\n", mfcdev->fw.info->size);
 			}
 		}
+
+#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
+		dev_lock(mfcdev->bus_dev, mfcdev->device, 133133);
 #endif
+#ifdef CONFIG_BUSFREQ
+		pm_qos_add_request(&bus_qos_pm_qos_req, PM_QOS_BUS_QOS, 1);
+#endif
+
 		ret = mfc_power_on();
 		if (ret < 0) {
 			mfc_err("power enable failed\n");
@@ -199,7 +292,6 @@ static int mfc_open(struct inode *inode, struct file *file)
 
 #ifndef CONFIG_PM_RUNTIME
 #ifdef SYSMMU_MFC_ON
-		//mfc_clock_on();
 		mfc_clock_on(mfcdev);
 
 		s5p_sysmmu_enable(mfcdev->device);
@@ -216,7 +308,6 @@ static int mfc_open(struct inode *inode, struct file *file)
 		 */
 		s5p_sysmmu_tlb_invalidate(mfcdev->device, SYSMMU_MFC_R);
 #endif
-		//mfc_clock_off();
 		mfc_clock_off(mfcdev);
 #endif
 #endif
@@ -228,16 +319,7 @@ static int mfc_open(struct inode *inode, struct file *file)
 			goto err_start_hw;
 		}
 	}
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
-	else {
-		if (check_magic(mfcdev->drm_info.addr)) {
-			clear_magic(mfcdev->drm_info.addr);
-			mfc_err("MFC instances are not cleared before DRM playback!\n");
-			ret = -EINVAL;
-			goto err_drm_start;
-		}
-	}
-#endif
+
 	if (atomic_read(&mfcdev->inst_cnt) >= MFC_MAX_INSTANCE_NUM) {
 		mfc_err("exceed max instance number, too many instance opened already\n");
 		ret = -EINVAL;
@@ -261,11 +343,22 @@ static int mfc_open(struct inode *inode, struct file *file)
 	atomic_inc(&mfcdev->inst_cnt);
 	mfcdev->inst_ctx[inst_id] = mfc_ctx;
 
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
+	if (check_magic(mfcdev->drm_info.addr) >= 0) {
+		mfc_info("DRM instance starting\n");
+		clear_magic(mfcdev->drm_info.addr + check_magic(mfcdev->drm_info.addr));
+		mfc_ctx->drm_flag = 1;
+		mfc_set_buf_alloc_scheme(MBS_FIRST_FIT);
+	} else {
+		mfc_ctx->drm_flag = 0;
+	}
+#endif
+
 	mfc_ctx->id = inst_id;
 	mfc_ctx->dev = mfcdev;
 
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
-	if (mfcdev->drm_playback) {
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
+	if (mfc_ctx->drm_flag) {
 		alloc = _mfc_alloc_buf(mfc_ctx, MFC_CTX_SIZE_L, ALIGN_2KB, MBT_CTX | PORT_A);
 		if (alloc == NULL) {
 			mfc_err("failed to alloc context buffer\n");
@@ -282,6 +375,27 @@ static int mfc_open(struct inode *inode, struct file *file)
 
 	file->private_data = (struct mfc_inst_ctx *)mfc_ctx;
 
+#if SUPPORT_SLICE_ENCODING
+	if (atomic_read(&mfcdev->inst_cnt) == 1) {
+		mfcdev->slice_encoding_flag = 0;
+		mfcdev->slice_sys = 0;
+		mfcdev->wait_slice_timeout = 0;
+		mfcdev->wait_frame_timeout = 0;
+	}
+	mfc_ctx->slice_flag = 0;
+	mfcdev->frame_sys = 1;
+	mfcdev->frame_working_flag = 0;
+	if (mfcdev->wait_frame_timeout == 1)
+		wake_up(&mfcdev->wait_frame);
+#endif
+#ifdef CONFIG_SLP_DMABUF
+	ret = mfc_queue_alloc(mfc_ctx);
+	if (ret < 0) {
+		mfc_err("mfc_queue_alloc failed\n");
+		goto err_inst_ctx;
+	}
+#endif
+
 	mfc_info("MFC instance [%d:%d] opened", mfc_ctx->id,
 		atomic_read(&mfcdev->inst_cnt));
 
@@ -289,14 +403,13 @@ static int mfc_open(struct inode *inode, struct file *file)
 
 	return 0;
 
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 err_drm_ctx:
 #endif
 err_inst_ctx:
 err_inst_id:
 err_inst_cnt:
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
-err_drm_start:
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 #endif
 err_start_hw:
 	if (atomic_read(&mfcdev->inst_cnt) == 0) {
@@ -305,9 +418,12 @@ err_start_hw:
 	}
 
 err_pwr_enable:
+#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
+	dev_unlock(mfcdev->bus_dev, mfcdev->device);
+#endif
+
 err_fw_state:
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
-err_drm_playback:
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 #endif
 	mutex_unlock(&mfcdev->lock);
 
@@ -327,8 +443,27 @@ static int mfc_release(struct inode *inode, struct file *file)
 	dev = mfc_ctx->dev;
 
 	mutex_lock(&dev->lock);
+#if SUPPORT_SLICE_ENCODING
+	dev->frame_working_flag = 1;
+	dev->frame_sys = 0;
+	if (dev->slice_encoding_flag == 1) {
+		mutex_unlock(&dev->lock);
+		dev->wait_slice_timeout = 1;
+		if (wait_event_timeout(dev->wait_slice, dev->slice_sys,
+			SLICE_ENC_TIMEOUT) == 0) {
+			mfc_err("Slice encoding done timeout : %d\n",
+				dev->slice_sys);
+			dev->slice_encoding_flag = 0;
+			dev->slice_sys = 0;
+			dev->wait_slice_timeout = 0;
+		}
+		mutex_lock(&dev->lock);
+		dev->slice_sys = 0;
+		dev->wait_slice_timeout = 0;
+	}
+#endif
 
-#ifdef CONFIG_BUSFREQ
+#if defined(CONFIG_BUSFREQ)
 	/* Release MFC & Bus Frequency lock for High resolution */
 	if (mfc_ctx->busfreq_flag == true) {
 		atomic_dec(&dev->busfreq_lock_cnt);
@@ -341,24 +476,43 @@ static int mfc_release(struct inode *inode, struct file *file)
 	}
 #endif
 
-#ifdef CONFIG_BUSFREQ_OPP
-	/* Release MFC & Bus Frequency lock for High resolution */
-	if (mfc_ctx->busfreq_flag == true) {
-		atomic_dec(&dev->busfreq_lock_cnt);
-		mfc_ctx->busfreq_flag = false;
-		if (atomic_read(&dev->busfreq_lock_cnt) == 0) {
-			/* Unlock bus frequency */
-			dev_unlock(dev->bus_dev, dev->device);
-			mfc_dbg("[%s] Bus Freq lock Released Normal!\n", __func__);
+#if defined(CONFIG_CPU_EXYNOS4210) && defined(CONFIG_EXYNOS4_CPUFREQ)
+	/* Release MFC & CPU Frequency lock for High resolution */
+	if (mfc_ctx->cpufreq_flag == true) {
+		atomic_dec(&dev->cpufreq_lock_cnt);
+		mfc_ctx->cpufreq_flag = false;
+		if (atomic_read(&dev->cpufreq_lock_cnt) == 0) {
+			/* release Freq lock back to normal */
+			exynos_cpufreq_lock_free(DVFS_LOCK_ID_MFC);
+			mfc_dbg("[%s] CPU Freq lock Released Normal!\n", __func__);
 		}
 	}
-
 #endif
 
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
-	mfcdev->drm_playback = 0;
+#ifdef CONFIG_BUSFREQ_OPP
+	if (mfc_ctx->dmcthreshold_flag == true) {
+		atomic_dec(&dev->dmcthreshold_lock_cnt);
+		mfc_ctx->dmcthreshold_flag = false;
+		if (atomic_read(&dev->dmcthreshold_lock_cnt) == 0) {
+			mfc_info("[%s] Restore dmc_max_threshold\n", __func__);
+			if (soc_is_exynos4212()) {
+				dmc_max_threshold =
+					EXYNOS4212_DMC_MAX_THRESHOLD;
+			} else if (soc_is_exynos4412()) {
+				dmc_max_threshold =
+					EXYNOS4412_DMC_MAX_THRESHOLD;
+			} else {
+				pr_err("Unsupported model.\n");
+				return -EINVAL;
+			}
+		}
+	}
+#endif
 
-	mfc_set_buf_alloc_scheme(MBS_BEST_FIT);
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
+	if (mfc_ctx->drm_flag) {
+		mfc_set_buf_alloc_scheme(MBS_FIRST_FIT);
+	}
 #endif
 	mfc_info("MFC instance [%d:%d] released\n", mfc_ctx->id,
 		atomic_read(&mfcdev->inst_cnt));
@@ -371,6 +525,18 @@ static int mfc_release(struct inode *inode, struct file *file)
 	mfc_destroy_inst(mfc_ctx);
 
 	if (atomic_read(&dev->inst_cnt) == 0) {
+#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
+		dev_unlock(mfcdev->bus_dev, mfcdev->device);
+#endif
+#ifdef CONFIG_BUSFREQ
+		pm_qos_remove_request(&bus_qos_pm_qos_req);
+#endif
+#if SUPPORT_SLICE_ENCODING
+		dev->slice_encoding_flag = 0;
+		dev->slice_sys = 0;
+		dev->wait_slice_timeout = 0;
+		dev->wait_frame_timeout = 0;
+#endif
 		ret = mfc_power_off();
 		if (ret < 0) {
 			mfc_err("power disable failed\n");
@@ -378,21 +544,39 @@ static int mfc_release(struct inode *inode, struct file *file)
 		}
 	} else {
 #if defined(SYSMMU_MFC_ON) && !defined(CONFIG_VIDEO_MFC_VCM_UMP)
-	//mfc_clock_on();
 	mfc_clock_on(mfcdev);
 
 	s5p_sysmmu_tlb_invalidate(dev->device);
 
-	//mfc_clock_off();
 	mfc_clock_off(mfcdev);
 #endif
 	}
 
 	ret = 0;
+#if SUPPORT_SLICE_ENCODING
+	dev->frame_sys = 1;
+	dev->frame_working_flag = 0;
+	if (mfcdev->wait_frame_timeout == 1)
+		wake_up(&dev->wait_frame);
+#endif
+#ifdef CONFIG_SLP_DMABUF
+	mfc_queue_free(mfc_ctx);
+#endif
 
 err_pwr_disable:
-	mutex_unlock(&dev->lock);
 
+#if defined(CONFIG_USE_MFC_CMA) && defined(CONFIG_MACH_M0)
+	if (atomic_read(&mfcdev->inst_cnt) == 0) {
+		size_t size = 0x02800000;
+		dma_free_coherent(mfcdev->device, size, mfcdev->cma_vaddr,
+					mfcdev->cma_dma_addr);
+		printk(KERN_INFO "%s[%d] size 0x%x, vaddr 0x%x, base 0x0%x\n",
+				__func__, __LINE__, (int)size,
+				(int) mfcdev->cma_vaddr,
+				(int)mfcdev->cma_dma_addr);
+	}
+#endif
+	mutex_unlock(&dev->lock);
 	return ret;
 }
 
@@ -437,7 +621,29 @@ static long mfc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	case IOCTL_MFC_DEC_INIT:
 		mutex_lock(&dev->lock);
+#if SUPPORT_SLICE_ENCODING
+		dev->frame_working_flag = 1;
+		dev->frame_sys = 0;
+		if (dev->slice_encoding_flag == 1) {
+			mutex_unlock(&dev->lock);
+			dev->wait_slice_timeout = 1;
+			if (wait_event_timeout(dev->wait_slice, dev->slice_sys,
+				SLICE_ENC_TIMEOUT) == 0) {
+				mfc_err("Slice encoding done timeout : %d\n",
+					dev->slice_sys);
+				dev->slice_encoding_flag = 0;
+				dev->slice_sys = 0;
+				dev->wait_slice_timeout = 0;
+				ret = -EINVAL;
 
+				mutex_lock(&dev->lock);
+				break;
+			}
+			mutex_lock(&dev->lock);
+			dev->slice_sys = 0;
+			dev->wait_slice_timeout = 0;
+		}
+#endif
 		if (mfc_chk_inst_state(mfc_ctx, INST_STATE_CREATE) < 0) {
 			mfc_err("IOCTL_MFC_DEC_INIT invalid state: 0x%08x\n",
 				 mfc_ctx->state);
@@ -448,18 +654,45 @@ static long mfc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			break;
 		}
 
-		//mfc_clock_on();
 		mfc_clock_on(mfcdev);
 		in_param.ret_code = mfc_init_decoding(mfc_ctx, &(in_param.args));
 		ret = in_param.ret_code;
-		//mfc_clock_off();
 		mfc_clock_off(mfcdev);
+#if SUPPORT_SLICE_ENCODING
+		dev->frame_sys = 1;
+		dev->frame_working_flag = 0;
+		if (dev->wait_frame_timeout == 1)
+			wake_up(&dev->wait_frame);
+#endif
 
 		mutex_unlock(&dev->lock);
 		break;
 
 	case IOCTL_MFC_ENC_INIT:
 		mutex_lock(&dev->lock);
+#if SUPPORT_SLICE_ENCODING
+		dev->frame_working_flag = 1;
+		dev->frame_sys = 0;
+		if (dev->slice_encoding_flag == 1) {
+			mutex_unlock(&dev->lock);
+			dev->wait_slice_timeout = 1;
+			if (wait_event_timeout(dev->wait_slice, dev->slice_sys,
+				SLICE_ENC_TIMEOUT) == 0) {
+				mfc_err("Slice encoding done timeout : %d\n",
+					dev->slice_sys);
+				dev->slice_encoding_flag = 0;
+				dev->slice_sys = 0;
+				dev->wait_slice_timeout = 0;
+				ret = -EINVAL;
+
+				mutex_lock(&dev->lock);
+				break;
+			}
+			mutex_lock(&dev->lock);
+			dev->slice_sys = 0;
+			dev->wait_slice_timeout = 0;
+		}
+#endif
 
 		if (mfc_chk_inst_state(mfc_ctx, INST_STATE_CREATE) < 0) {
 			mfc_err("IOCTL_MFC_ENC_INIT invalid state: 0x%08x\n",
@@ -471,18 +704,45 @@ static long mfc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			break;
 		}
 
-		//mfc_clock_on();
 		mfc_clock_on(mfcdev);
 		in_param.ret_code = mfc_init_encoding(mfc_ctx, &(in_param.args));
 		ret = in_param.ret_code;
-		//mfc_clock_off();
 		mfc_clock_off(mfcdev);
+#if SUPPORT_SLICE_ENCODING
+		dev->frame_sys = 1;
+		dev->frame_working_flag = 0;
+		if (dev->wait_frame_timeout == 1)
+			wake_up(&dev->wait_frame);
+#endif
 
 		mutex_unlock(&dev->lock);
 		break;
 
 	case IOCTL_MFC_DEC_EXE:
 		mutex_lock(&dev->lock);
+#if SUPPORT_SLICE_ENCODING
+		dev->frame_working_flag = 1;
+		dev->frame_sys = 0;
+		if (dev->slice_encoding_flag == 1) {
+			mutex_unlock(&dev->lock);
+			dev->wait_slice_timeout = 1;
+			if (wait_event_timeout(dev->wait_slice, dev->slice_sys,
+				SLICE_ENC_TIMEOUT) == 0) {
+				mfc_err("Slice encoding done timeout : %d\n",
+					dev->slice_sys);
+				dev->slice_encoding_flag = 0;
+				dev->slice_sys = 0;
+				dev->wait_slice_timeout = 0;
+				ret = -EINVAL;
+
+				mutex_lock(&dev->lock);
+				break;
+			}
+			mutex_lock(&dev->lock);
+			dev->slice_sys = 0;
+			dev->wait_slice_timeout = 0;
+		}
+#endif
 
 		if (mfc_ctx->state < INST_STATE_INIT) {
 			mfc_err("IOCTL_MFC_DEC_EXE invalid state: 0x%08x\n",
@@ -494,18 +754,70 @@ static long mfc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			break;
 		}
 
-		//mfc_clock_on();
 		mfc_clock_on(mfcdev);
 		in_param.ret_code = mfc_exec_decoding(mfc_ctx, &(in_param.args));
 		ret = in_param.ret_code;
-		//mfc_clock_off();
 		mfc_clock_off(mfcdev);
+#if SUPPORT_SLICE_ENCODING
+		dev->frame_sys = 1;
+		dev->frame_working_flag = 0;
+		if (dev->wait_frame_timeout == 1)
+			wake_up(&dev->wait_frame);
+#endif
 
 		mutex_unlock(&dev->lock);
 		break;
 
 	case IOCTL_MFC_ENC_EXE:
 		mutex_lock(&dev->lock);
+#if SUPPORT_SLICE_ENCODING
+		if (mfc_ctx->slice_flag == 0) {
+			dev->frame_working_flag = 1;
+			dev->frame_sys = 0;
+		}
+
+		if ((dev->slice_encoding_flag == 1)
+			&& (mfc_ctx->slice_flag == 0)) {
+			mutex_unlock(&dev->lock);
+			dev->wait_slice_timeout = 1;
+			if (wait_event_timeout(dev->wait_slice, dev->slice_sys,
+				SLICE_ENC_TIMEOUT) == 0) {
+				mfc_err("Slice encoding done timeout : %d\n",
+					dev->slice_sys);
+				dev->slice_encoding_flag = 0;
+				dev->slice_sys = 0;
+				dev->wait_slice_timeout = 0;
+				ret = -EINVAL;
+
+				mutex_lock(&dev->lock);
+				break;
+			}
+			mutex_lock(&dev->lock);
+			dev->slice_sys = 0;
+			dev->wait_slice_timeout = 0;
+		}
+
+		if ((dev->frame_working_flag == 1) && (mfc_ctx->slice_flag == 1)
+			&& (dev->slice_encoding_flag == 0)) {
+			mutex_unlock(&dev->lock);
+			dev->wait_frame_timeout = 1;
+			if (wait_event_timeout(dev->wait_frame, dev->frame_sys,
+				SLICE_ENC_TIMEOUT) == 0) {
+				mfc_err("frame working done timeout : %d\n",
+					dev->frame_sys);
+				dev->frame_working_flag = 0;
+				dev->frame_sys = 0;
+				dev->wait_frame_timeout = 0;
+				ret = -EINVAL;
+
+				mutex_lock(&dev->lock);
+				break;
+			}
+			mutex_lock(&dev->lock);
+			dev->frame_sys = 0;
+			dev->wait_frame_timeout = 0;
+		}
+#endif
 
 		if (mfc_ctx->state < INST_STATE_INIT) {
 			mfc_err("IOCTL_MFC_DEC_EXE invalid state: 0x%08x\n",
@@ -517,12 +829,18 @@ static long mfc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			break;
 		}
 
-		//mfc_clock_on();
 		mfc_clock_on(mfcdev);
 		in_param.ret_code = mfc_exec_encoding(mfc_ctx, &(in_param.args));
 		ret = in_param.ret_code;
-		//mfc_clock_off();
 		mfc_clock_off(mfcdev);
+#if SUPPORT_SLICE_ENCODING
+		if (mfc_ctx->slice_flag == 0) {
+			dev->frame_sys = 1;
+			dev->frame_working_flag = 0;
+			if (dev->wait_frame_timeout == 1)
+				wake_up(&dev->wait_frame);
+		}
+#endif
 
 		mutex_unlock(&dev->lock);
 		break;
@@ -602,7 +920,7 @@ static long mfc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		in_param.ret_code = MFC_OK;
 		ret = 0;
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 		for (i = 0; i < MFC_MAX_MEM_CHUNK_NUM; i++)
 			ret += mfc_mem_data_size(i);
 
@@ -621,8 +939,7 @@ static long mfc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			buf_arg.align = ALIGN_2KB;
 			port = 1;
 			ret = mfc_vcm_bind_from_others(mfc_ctx, &buf_arg, MBT_OTHER | port);
-		}
-		else {
+		} else {
 		in_param.args.real_addr.addr =
 			mfc_ump_get_virt(in_param.args.real_addr.key);
 
@@ -784,7 +1101,7 @@ static int mfc_mmap(struct file *file, struct vm_area_struct *vma)
 		mfc_mem_data_size(1),
 		real_size);
 
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	real_size += mfc_mem_hole_size();
 #endif
 
@@ -900,7 +1217,7 @@ static int mfc_mmap(struct file *file, struct vm_area_struct *vma)
 #else	/* not SYSMMU_MFC_ON */
 	/* early allocator */
 	/* CMA or bootmem(memblock) */
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	vma->vm_flags |= VM_RESERVED | VM_IO;
 	if (mfc_ctx->buf_cache_type == NO_CACHE)
 		vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
@@ -935,34 +1252,28 @@ static int mfc_mmap(struct file *file, struct vm_area_struct *vma)
 	remap_size = min((unsigned long)mfc_mem_data_size(1),
 			user_size - remap_offset);
 	/*
-	 * Chunk 1 mapping
+	 * Chunk 1 mapping if it's available
 	 */
-	if (remap_size <= 0) {
-		mfc_err("invalid remap size of chunk 1\n");
-		return -EINVAL;
-	}
+	if (remap_size > 0) {
+		pfn = __phys_to_pfn(mfc_mem_data_base(1));
+		if (remap_pfn_range(vma, vma->vm_start + remap_offset, pfn,
+					remap_size, vma->vm_page_prot)) {
 
-	pfn = __phys_to_pfn(mfc_mem_data_base(1));
-	if (remap_pfn_range(vma, vma->vm_start + remap_offset, pfn,
-				remap_size, vma->vm_page_prot)) {
-
-		mfc_err("failed to remap chunk 1\n");
-		return -EINVAL;
+			mfc_err("failed to remap chunk 1\n");
+			return -EINVAL;
+		}
 	}
 #else
+	vma->vm_flags |= VM_RESERVED | VM_IO;
+	if (mfc_ctx->buf_cache_type == NO_CACHE)
+		vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+
+	mfc_info("MFC buffers are %scacheable\n",
+			mfc_ctx->buf_cache_type ? "" : "non-");
+
 	if (dev->mem_ports == 1) {
 		remap_offset = 0;
-		remap_size = user_size;
-
-		vma->vm_flags |= VM_RESERVED | VM_IO;
-
-		if(mfc_ctx->buf_cache_type == NO_CACHE){
-			vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
-			mfc_info("CONFIG_VIDEO_MFC_CACHE is not enabled\n");
-		}else
-			mfc_info("CONFIG_VIDEO_MFC_CACHE is enabled\n");
-
-
+		remap_size = min((unsigned long)mfc_mem_data_size(0), user_size);
 		/*
 		 * Port 0 mapping for stream buf & frame buf (chroma + MV + luma)
 		 */
@@ -976,17 +1287,6 @@ static int mfc_mmap(struct file *file, struct vm_area_struct *vma)
 	} else {
 		remap_offset = 0;
 		remap_size = min((unsigned long)mfc_mem_data_size(0), user_size);
-
-		vma->vm_flags |= VM_RESERVED | VM_IO;
-
-		if(mfc_ctx->buf_cache_type == NO_CACHE){
-			vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
-			mfc_info("CONFIG_VIDEO_MFC_CACHE is not enabled\n");
-		}else
-			mfc_info("CONFIG_VIDEO_MFC_CACHE is enabled\n");
-
-
-
 		/*
 		 * Port 0 mapping for stream buf & frame buf (chroma + MV)
 		 */
@@ -1001,13 +1301,6 @@ static int mfc_mmap(struct file *file, struct vm_area_struct *vma)
 		remap_offset = remap_size;
 		remap_size = min((unsigned long)mfc_mem_data_size(1),
 			user_size - remap_offset);
-
-		vma->vm_flags |= VM_RESERVED | VM_IO;
-
-		if(mfc_ctx->buf_cache_type == NO_CACHE)
-			vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
-
-
 		/*
 		 * Port 1 mapping for frame buf (luma)
 		 */
@@ -1020,7 +1313,6 @@ static int mfc_mmap(struct file *file, struct vm_area_struct *vma)
 		}
 	}
 #endif
-
 	mfc_ctx->userbase = vma->vm_start;
 
 	mfc_dbg("user request mem = %ld, available data mem = %ld\n",
@@ -1067,8 +1359,8 @@ static void mfc_firmware_request_complete_handler(const struct firmware *fw,
 }
 
 static int proc_read_inst_number(char *buf, char **start,
-                             off_t off, int count,
-                             int *eof, void *data)
+								off_t off, int count,
+								int *eof, void *data)
 {
 	int len = 0;
 
@@ -1113,18 +1405,30 @@ static int __devinit mfc_probe(struct platform_device *pdev)
 	init_waitqueue_head(&mfcdev->wait_sys);
 	init_waitqueue_head(&mfcdev->wait_codec[0]);
 	init_waitqueue_head(&mfcdev->wait_codec[1]);
+#if SUPPORT_SLICE_ENCODING
+	init_waitqueue_head(&mfcdev->wait_slice);
+	init_waitqueue_head(&mfcdev->wait_frame);
+#endif
 	atomic_set(&mfcdev->inst_cnt, 0);
-#ifdef CONFIG_BUSFREQ
+#if defined(CONFIG_BUSFREQ)
 	atomic_set(&mfcdev->busfreq_lock_cnt, 0);
 #endif
-	mfcdev->device = &pdev->dev;
-
-#ifdef CONFIG_BUSFREQ_OPP
-		atomic_set(&mfcdev->busfreq_lock_cnt, 0);
-
-		/* To lock bus frequency in OPP mode */
-	mfcdev->bus_dev = dev_get("exynos-busfreq");
+#if defined(CONFIG_CPU_EXYNOS4210) && defined(CONFIG_EXYNOS4_CPUFREQ)
+	atomic_set(&mfcdev->cpufreq_lock_cnt, 0);
+	mfcdev->cpufreq_level = 0;
 #endif
+#ifdef CONFIG_BUSFREQ_OPP
+	atomic_set(&mfcdev->dmcthreshold_lock_cnt, 0);
+#endif
+	mfcdev->device = &pdev->dev;
+#if SUPPORT_SLICE_ENCODING
+	mfcdev->slice_encoding_flag = 0;
+	mfcdev->slice_sys = 0;
+	mfcdev->frame_sys = 0;
+	mfcdev->wait_slice_timeout = 0;
+	mfcdev->wait_frame_timeout = 0;
+#endif
+
 	platform_set_drvdata(pdev, mfcdev);
 
 	/* get the memory region */
@@ -1215,17 +1519,24 @@ static int __devinit mfc_probe(struct platform_device *pdev)
 	}
 #endif
 
+#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
+	/* To lock bus frequency in OPP mode */
+	mfcdev->bus_dev = dev_get("exynos-busfreq");
+#endif
 	/*
 	 * initialize buffer manager
 	 */
-	mfc_init_buf();
+	ret = mfc_init_buf();
+	if (ret < 0) {
+		printk(KERN_ERR "failed to init. MFC buffer manager\n");
+		goto err_buf_mgr;
+	}
 
 	/* FIXME: final dec & enc */
 	mfc_init_decoders();
 	mfc_init_encoders();
 
 	ret = misc_register(&mfc_miscdev);
-
 	if (ret) {
 		mfc_err("MFC can't misc register on minor=%d\n", MFC_MINOR);
 		goto err_misc_reg;
@@ -1244,24 +1555,21 @@ static int __devinit mfc_probe(struct platform_device *pdev)
 err_misc_reg:
 	mfc_final_buf();
 
+err_buf_mgr:
 #ifdef SYSMMU_MFC_ON
 #ifdef CONFIG_VIDEO_MFC_VCM_UMP
-	//mfc_clock_on();
 	mfc_clock_on(mfcdev);
 
 	vcm_deactivate(mfcdev->vcm_info.sysmmu_vcm);
 
-	//mfc_clock_off();
 	mfc_clock_off(mfcdev);
 
 err_act_vcm:
 #endif
-	//mfc_clock_on();
 	mfc_clock_on(mfcdev);
 
 	s5p_sysmmu_disable(mfcdev->device);
 
-	//mfc_clock_off();
 	mfc_clock_off(mfcdev);
 #endif
 	if (mfcdev->fw.info)
@@ -1269,12 +1577,10 @@ err_act_vcm:
 
 err_fw_req:
 	/* FIXME: make kenel dump when probe fail */
-	//mfc_clock_on();
 	mfc_clock_on(mfcdev);
 
 	mfc_final_mem_mgr(mfcdev);
 
-	//mfc_clock_off();
 	mfc_clock_off(mfcdev);
 
 err_mem_mgr:
@@ -1313,7 +1619,6 @@ static int __devexit mfc_remove(struct platform_device *pdev)
 
 	mfc_final_buf();
 #ifdef SYSMMU_MFC_ON
-	//mfc_clock_on();
 	mfc_clock_on(mfcdev);
 
 #ifdef CONFIG_VIDEO_MFC_VCM_UMP
@@ -1322,7 +1627,6 @@ static int __devexit mfc_remove(struct platform_device *pdev)
 
 	s5p_sysmmu_disable(mfcdev->device);
 
-	//mfc_clock_off();
 	mfc_clock_off(mfcdev);
 #endif
 	if (dev->fw.info)
@@ -1371,7 +1675,6 @@ static int mfc_resume(struct device *dev)
 		return 0;
 
 #ifdef SYSMMU_MFC_ON
-	//mfc_clock_on();
 	mfc_clock_on(dev);
 
 	s5p_sysmmu_enable(dev);
@@ -1382,8 +1685,7 @@ static int mfc_resume(struct device *dev)
 	s5p_sysmmu_set_tablebase_pgd(dev, __pa(swapper_pg_dir));
 #endif
 
-	//mfc_clock_off();
-	mfc_clock_off(dev);
+	mfc_clock_off(mfcdev);
 #endif
 
 	mutex_lock(&m_dev->lock);
@@ -1426,7 +1728,6 @@ static int mfc_runtime_resume(struct device *dev)
 
 #ifdef SYSMMU_MFC_ON
 	if (pre_power == 0) {
-		//mfc_clock_on();
 		mfc_clock_on(dev);
 
 		s5p_sysmmu_enable(dev);
@@ -1437,7 +1738,6 @@ static int mfc_runtime_resume(struct device *dev)
 		s5p_sysmmu_set_tablebase_pgd(dev, __pa(swapper_pg_dir));
 #endif
 
-		//mfc_clock_off();
 		mfc_clock_off(dev);
 	}
 #endif
@@ -1499,4 +1799,3 @@ MODULE_AUTHOR("Jeongtae, Park");
 MODULE_AUTHOR("Jaeryul, Oh");
 MODULE_DESCRIPTION("FIMV MFC(Multi Function Codec) V5.x Device Driver");
 MODULE_LICENSE("GPL");
-

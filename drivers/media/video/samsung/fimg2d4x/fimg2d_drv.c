@@ -38,7 +38,6 @@
 #include "fimg2d_clk.h"
 #include "fimg2d_ctx.h"
 #include "fimg2d_helper.h"
-#include <mach/dev.h>
 
 #define CTX_TIMEOUT	msecs_to_jiffies(5000)
 
@@ -64,7 +63,7 @@ static irqreturn_t fimg2d_irq(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static int fimg2d_sysmmu_fault_handler(enum S5P_SYSMMU_INTERRUPT_TYPE itype,
+static int fimg2d_sysmmu_fault_handler(enum exynos_sysmmu_inttype itype,
 		unsigned long pgtable_base, unsigned long fault_addr)
 {
 	struct fimg2d_bltcmd *cmd;
@@ -173,10 +172,9 @@ static long fimg2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	int ret = 0;
 	struct fimg2d_context *ctx;
 	struct fimg2d_platdata *pdata;
-	union {
-		struct fimg2d_blit *blit;
-		struct fimg2d_version ver;
-	} u;
+	struct fimg2d_blit blit;
+	struct fimg2d_version ver;
+	struct fimg2d_image dst;
 
 	ctx = file->private_data;
 	if (!ctx) {
@@ -186,33 +184,42 @@ static long fimg2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	switch (cmd) {
 	case FIMG2D_BITBLT_BLIT:
-		fimg2d_debug("FIMG2D_BITBLT_BLIT ctx: %p\n", ctx);
-		u.blit = (struct fimg2d_blit *)arg;
+		if (info->err) {
+			printk(KERN_ERR "[%s] device error, do sw fallback\n",
+					__func__);
+			return -EFAULT;
+		}
 
-#ifdef CONFIG_BUSFREQ_OPP
-#if defined(CONFIG_CPU_EXYNOS4412)
-		dev_lock(info->bus_dev, info->dev, 267160);//160160);
-#endif		
+		if (copy_from_user(&blit, (void *)arg, sizeof(blit)))
+			return -EFAULT;
+		if (blit.dst)
+			if (copy_from_user(&dst, (void *)blit.dst, sizeof(dst)))
+				return -EFAULT;
+
+#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+			dev_lock(info->bus_dev, info->dev, 160160);
 #endif
-//		dev_lock(info->bus_dev, info->dev, 267160);
-#ifdef PERF_PROFILE
-//		perf_start(ctx, PERF_KERN);
 #endif
-		ret = fimg2d_add_command(info, ctx, u.blit);
-		if (!ret)
+		if ((blit.dst) && (dst.addr.type == ADDR_USER))
+			down_write(&page_alloc_slow_rwsem);
+		ret = fimg2d_add_command(info, ctx, &blit);
+		if (!ret) {
 			fimg2d_request_bitblt(ctx);
+		}
+
 #ifdef PERF_PROFILE
-//		perf_end(ctx, PERF_KERN);
-		perf_print(ctx, u.blit->seq_no);
+		perf_print(ctx, blit.seq_no);
 		perf_clear(ctx);
 #endif
+		if ((blit.dst) && (dst.addr.type == ADDR_USER))
+			up_write(&page_alloc_slow_rwsem);
 
-#ifdef CONFIG_BUSFREQ_OPP
-#if defined(CONFIG_CPU_EXYNOS4412)
-		dev_unlock(info->bus_dev, info->dev);
+#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+			dev_unlock(info->bus_dev, info->dev);
 #endif
 #endif
-//	dev_unlock(info->bus_dev, info->dev);
 		break;
 
 	case FIMG2D_BITBLT_SYNC:
@@ -221,17 +228,19 @@ static long fimg2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case FIMG2D_BITBLT_VERSION:
-		fimg2d_debug("FIMG2D_BITBLT_VERSION ctx: %p\n", ctx);
 		pdata = to_fimg2d_plat(info->dev);
-		u.ver.hw = pdata->hw_ver;
-		u.ver.sw = 0;
-		fimg2d_debug("fimg2d version, hw: 0x%x sw: 0x%x\n", u.ver.hw, u.ver.sw);
-		if (copy_to_user((void *)arg, &u.ver, sizeof(u.ver)))
+		ver.hw = pdata->hw_ver;
+		ver.sw = 0;
+		fimg2d_debug("fimg2d version, hw: 0x%x sw: 0x%x\n",
+				ver.hw, ver.sw);
+		if (copy_to_user((void *)arg, &ver, sizeof(ver)))
 			return -EFAULT;
 		break;
 
 	default:
-		//printk(KERN_ERR "[%s] unknown ioctl\n", __func__);
+#if 0
+		printk(KERN_ERR "[%s] unknown ioctl\n", __func__);
+#endif
 		ret = -EFAULT;
 		break;
 	}
@@ -311,7 +320,7 @@ static int fimg2d_probe(struct platform_device *pdev)
 	if (!res) {
 		printk(KERN_ERR "FIMG2D failed to get resource\n");
 		ret = -ENOENT;
-		goto err_res;
+		goto err_region;
 	}
 
 	info->mem = request_mem_region(res->start, resource_size(res),
@@ -337,7 +346,7 @@ static int fimg2d_probe(struct platform_device *pdev)
 	if (!info->irq) {
 		printk(KERN_ERR "FIMG2D failed to get irq resource\n");
 		ret = -ENOENT;
-		goto err_map;
+		goto err_irq;
 	}
 	fimg2d_debug("irq: %d\n", info->irq);
 
@@ -359,15 +368,14 @@ static int fimg2d_probe(struct platform_device *pdev)
 	pm_runtime_enable(info->dev);
 	fimg2d_debug("enable runtime pm\n");
 #endif
-#ifdef CONFIG_BUSFREQ_OPP
-#if defined(CONFIG_CPU_EXYNOS4412)
+
+#if defined(CONFIG_BUSFREQ_OPP) || defined(CONFIG_BUSFREQ_LOCK_WRAPPER)
+#if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
 	/* To lock bus frequency in OPP mode */
 	info->bus_dev = dev_get("exynos-busfreq");
 #endif
 #endif
-
-//	info->bus_dev = dev_get("exynos-busfreq");
-	s5p_sysmmu_set_fault_handler(info->dev, fimg2d_sysmmu_fault_handler);
+	exynos_sysmmu_set_fault_handler(info->dev, fimg2d_sysmmu_fault_handler);
 	fimg2d_debug("register sysmmu page fault handler\n");
 
 	/* misc register */
@@ -390,12 +398,10 @@ err_irq:
 	iounmap(info->regs);
 
 err_map:
+	release_resource(info->mem);
 	kfree(info->mem);
 
 err_region:
-	release_resource(info->mem);
-
-err_res:
 	destroy_workqueue(info->work_q);
 
 err_setup:

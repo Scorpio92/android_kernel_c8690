@@ -65,3 +65,4 @@ obj-$(CONFIG_SENSOR_ST_LSM330D) += lsm330dlc_acc.o lsm330dlc_gyr.o
 obj-$(CONFIG_SENSORS_AK8963)	+= akm8963.o
 
 obj-$(CONFIG_ANC_ES305)   +=es305/
+obj-$(CONFIG_MALI_CONTROL)	+= mali_control.o

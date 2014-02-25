@@ -81,13 +81,12 @@ config CPU_EXYNOS5250
 	help
 	  Enable EXYNOS5250 CPU support
 
-config EXYNOS4_CONTENT_PATH_PROTECTION
-	bool "Exynos4 Content Path Protection"
-	depends on ARM_TRUSTZONE
+config EXYNOS_CONTENT_PATH_PROTECTION
+	bool "Exynos Content Path Protection"
+	depends on (ARM_TRUSTZONE && (ARCH_EXYNOS4 || ARCH_EXYNOS5))
 	default n
 	help
-	  Enable content path protection of EXYNOS4.
-##Robin Wang
+	  Enable content path protection of EXYNOS.
 
 choice
 	prompt "TC4 Android Version"
@@ -428,48 +427,11 @@ config EXYNOS5_CPUFREQ
 	help
 	  Exynos5 cpufreq support
 
-choice
-	prompt "Max CPU frequency"
-	default EXYNOS4X12_1400MHZ_SUPPORT
-	default EXYNOS5250_1400MHZ_SUPPORT
-
-config EXYNOS4X12_1500MHZ_SUPPORT
-	bool "Max 1500MHz CPUFREQ LEVEL"
-	depends on EXYNOS4_CPUFREQ && (CPU_EXYNOS4212 || CPU_EXYNOS4412) && TC4_DVT
+config EXYNOS4X12_1800MHZ_SUPPORT
+	bool "Max 1800MHz CPUFREQ LEVEL"
+	depends on CPU_EXYNOS4412
 	help
-	  Max 1.5Ghz support
-
-config EXYNOS4X12_1400MHZ_SUPPORT
-	bool "Max 1400MHz CPUFREQ LEVEL"
-	depends on EXYNOS4_CPUFREQ && (CPU_EXYNOS4212 || CPU_EXYNOS4412) && TC4_DVT
-	help
-	  Max 1.4Ghz support
-
-config EXYNOS4X12_1200MHZ_SUPPORT
-	bool "Max 1200MHz CPUFREQ LEVEL"
-	depends on EXYNOS4_CPUFREQ && (CPU_EXYNOS4212 || CPU_EXYNOS4412)
-	help
-	  Max 1.2Ghz support
-
-config EXYNOS5250_1400MHZ_SUPPORT
-	bool "Max 1400MHz CPUFREQ LEVEL"
-	depends on EXYNOS5_CPUFREQ && CPU_EXYNOS5250
-	help
-	  Max 1.4Ghz support for EXYNOS5250
-
-config EXYNOS5250_1200MHZ_SUPPORT
-	bool "Max 1200MHz CPUFREQ LEVEL"
-	depends on EXYNOS5_CPUFREQ && CPU_EXYNOS5250
-	help
-	  Max 1.2Ghz support for EXYNOS5250
-
-config EXYNOS5250_1000MHZ_SUPPORT
-	bool "Max 1000MHz CPUFREQ LEVEL"
-	depends on EXYNOS5_CPUFREQ && CPU_EXYNOS5250
-	help
-	  Max 1.0Ghz support for EXYNOS5250
-
-endchoice
+	  Max 1.8Ghz support
 
 menu "Support dynamic CPU Hotplug"
 	depends on HOTPLUG_CPU && SMP

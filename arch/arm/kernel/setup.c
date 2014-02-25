@@ -49,6 +49,9 @@
 #include <asm/mach/time.h>
 #include <asm/traps.h>
 #include <asm/unwind.h>
+#ifdef CONFIG_MIDAS_COMMON
+#include <plat/cpu.h>
+#endif
 
 #if defined(CONFIG_DEPRECATED_PARAM_STRUCT)
 #include "compat.h"
@@ -75,6 +78,9 @@ __setup("fpe=", fpe_setup);
 extern void paging_init(struct machine_desc *desc);
 extern void sanity_check_meminfo(void);
 extern void reboot_setup(char *str);
+#ifdef CONFIG_DMA_CMA
+extern void setup_dma_zone(struct machine_desc *desc);
+#endif
 
 unsigned int processor_id;
 EXPORT_SYMBOL(processor_id);
@@ -727,7 +733,7 @@ static struct init_tags {
 };
 
 static int __init customize_machine(void)
-{	
+{
 	/* customizes platform devices, or adds new ones */
 	if (machine_desc->init_machine)
 		machine_desc->init_machine();
@@ -887,6 +893,9 @@ void __init setup_arch(char **cmdline_p)
 	machine_desc = mdesc;
 	machine_name = mdesc->name;
 
+#ifdef CONFIG_DMA_CMA
+	setup_dma_zone(mdesc);
+#endif
 	if (mdesc->soft_reboot)
 		reboot_setup("s");
 
@@ -989,25 +998,10 @@ static const char *hwcap_str[] = {
 static int c_show(struct seq_file *m, void *v)
 {
 	int i;
-//8690,Zeping.Zhou,start,2012-12-27,[third part]ttpod run error
-	/*
-	unsigned long tmp;
-	//Robin, add the cpu id info
-	if ((samsung_cpu_id & 0xfffff000) == 0x43220000)//exynos4212
-	{
-		tmp = 0xe4212000;
-		tmp |= (samsung_cpu_id & 0xfff);
-		seq_printf(m, "cpu id\t\t: 0x%08lx\n", tmp);
-	}
-	else
-		seq_printf(m, "cpu id\t\t: 0x%08lx\n", samsung_cpu_id);
-	
-	seq_printf(m, "\nProcessor\t: %s rev %d (%s)\n",
+
+	seq_printf(m, "Processor\t: %s rev %d (%s)\n",
 		   cpu_name, read_cpuid_id() & 15, elf_platform);
-*/
-  seq_printf(m, "Processor\t: %s rev %d (%s)\n",
-  	cpu_name, read_cpuid_id() & 15, elf_platform);
-//8690,Zeping.Zhou,end,2012-12-27,[third part]ttpod run error
+
 #if defined(CONFIG_SMP)
 	for_each_online_cpu(i) {
 		/*
@@ -1056,6 +1050,10 @@ static int c_show(struct seq_file *m, void *v)
 
 	seq_puts(m, "\n");
 
+#ifdef CONFIG_MIDAS_COMMON
+	if (soc_is_exynos4412())
+		seq_printf(m, "Chip revision\t: %04x\n", samsung_rev());
+#endif
 	seq_printf(m, "Hardware\t: %s\n", machine_name);
 	seq_printf(m, "Revision\t: %04x\n", system_rev);
 	seq_printf(m, "Serial\t\t: %08x%08x\n",

@@ -16,6 +16,13 @@
 #include <linux/mm.h>
 #include <linux/err.h>
 
+#ifdef CONFIG_SLP
+#include <linux/cma.h>
+#ifdef CONFIG_SLP_DMABUF
+#include <linux/dma-buf.h>
+#endif
+#endif
+
 #include "mfc.h"
 #include "mfc_mem.h"
 #include "mfc_buf.h"
@@ -30,6 +37,168 @@
 #include "ump_kernel_interface_vcm.h"
 #endif
 
+#ifdef CONFIG_SLP_DMABUF
+struct mfc_dmabuf_buf {
+	dma_addr_t			dma_addr;
+	unsigned long			size;
+	/* fd exported from this buf object. */
+	int				export_fd;
+	/* dma buf exported from this buf object. */
+	struct dma_buf			*export_dma_buf;
+	struct dma_buf_attachment	*db_attach;
+	atomic_t			refcount;
+};
+
+static void _mfc_dmabuf_put(struct mfc_dmabuf_buf *buf)
+{
+	if (atomic_dec_and_test(&buf->refcount)) {
+		/*
+		 * In legacy driver, dmabuf functions don't control
+		 * cma memory allocation and free.
+		 * so, currently we comment cma_free function.
+		 * cma_free(buf->dma_addr);
+		 */
+		kfree(buf);
+	}
+}
+
+static int mfc_attach_dmabuf(struct dma_buf *dmabuf, struct device *dev,
+				struct dma_buf_attachment *attach)
+{
+	mfc_dbg("mfc_attach_dmabuf: called !\n");
+	return 0;
+}
+
+static void mfc_detach_dmabuf(struct dma_buf *dmabuf,
+				struct dma_buf_attachment *attach)
+{
+	mfc_dbg("mfc_detach_dmabuf: called !\n");
+	dma_buf_put(dmabuf);
+}
+
+static struct sg_table *
+	mfc_map_dmabuf(struct dma_buf_attachment *attach,
+				enum dma_data_direction direction)
+{
+	struct mfc_dmabuf_buf *buf;
+	struct sg_table *sgt;
+	int ret;
+	int val;
+
+	mfc_dbg("mfc_map_dmabuf: called !\n");
+	if (!attach->dmabuf->priv) {
+		mfc_err("mfc_map_dmabuf: failed : attach->dmabuf->priv is NULL\n");
+		return NULL;
+	}
+	buf = attach->dmabuf->priv;
+	sgt = kzalloc(sizeof(struct sg_table), GFP_KERNEL);
+	if (!sgt) {
+		mfc_err("mfc_map_dmabuf: failed to allocate sg table.\n");
+		return ERR_PTR(-ENOMEM);
+	}
+
+	ret = sg_alloc_table(sgt, 1, GFP_KERNEL);
+	if (ret < 0) {
+		mfc_err("mfc_map_dmabuf: failed to allocate scatter list.\n");
+		kfree(sgt);
+		sgt = NULL;
+		return ERR_PTR(-ENOMEM);
+	}
+
+	sg_init_table(sgt->sgl, 1);
+	sg_dma_len(sgt->sgl) = buf->size;
+	sg_set_page(sgt->sgl, pfn_to_page(PFN_DOWN(buf->dma_addr)),
+			buf->size, 0);
+	sg_dma_address(sgt->sgl) = buf->dma_addr;
+
+	/*
+	 * increase reference count of this buf object.
+	 *
+	 * Note:
+	 * alloated physical memory region is being shared with others so
+	 * this region shouldn't be released until all references of this
+	 * region will be dropped by mfc_unmap_dmabuf().
+	 */
+	val = atomic_inc_return(&buf->refcount);
+	mfc_dbg("mfc_map_dmabuf: refcount: %d\n", val);
+
+	return sgt;
+}
+
+static void mfc_unmap_dmabuf(struct dma_buf_attachment *attach,
+		struct sg_table *sgt, enum dma_data_direction direction)
+{
+	int val = 0;
+	struct mfc_dmabuf_buf *buf;
+
+	mfc_dbg("mfc_unmap_dmabuf: called !\n");
+	buf = attach->dmabuf->priv;
+
+	sg_free_table(sgt);
+	kfree(sgt);
+	sgt = NULL;
+
+	val = atomic_dec_return(&buf->refcount);
+	mfc_dbg("mfc_unmap_dmabuf: refcount: %d\n", val);
+}
+
+static void mfc_release_dmabuf(struct dma_buf *dmabuf)
+{
+	struct mfc_dmabuf_buf *buf;
+
+	mfc_dbg("mfc_release_dmabuf: called !\n");
+	if (!dmabuf->priv) {
+		mfc_dbg("mfc_release_dmabuf: failed: dmabuf->priv is NULL\n");
+		return;
+	}
+	buf = dmabuf->priv;
+	if (buf->export_dma_buf == dmabuf) {
+		mfc_dbg("mfc_release_dmabuf: called !\n");
+		buf->export_fd = -1;
+		buf->export_dma_buf = NULL;
+
+		_mfc_dmabuf_put(buf);
+	}
+}
+
+static void *mfc_kmap_atomic_dmabuf(struct dma_buf *dma_buf,
+						unsigned long page_num)
+{
+	return NULL;
+}
+
+static void mfc_kunmap_atomic_dmabuf(struct dma_buf *dma_buf,
+						unsigned long page_num,
+						void *addr)
+{
+
+}
+
+static void *mfc_kmap_dmabuf(struct dma_buf *dma_buf,
+					unsigned long page_num)
+{
+	return NULL;
+}
+
+static void mfc_kunmap_dmabuf(struct dma_buf *dma_buf,
+					unsigned long page_num, void *addr)
+{
+
+}
+
+static struct dma_buf_ops mfc_dmabuf_ops = {
+	.attach		= mfc_attach_dmabuf,
+	.detach		= mfc_detach_dmabuf,
+	.map_dma_buf	= mfc_map_dmabuf,
+	.unmap_dma_buf	= mfc_unmap_dmabuf,
+	.release	= mfc_release_dmabuf,
+	.kmap		= mfc_kmap_dmabuf,
+	.kmap_atomic	= mfc_kmap_atomic_dmabuf,
+	.kunmap		= mfc_kunmap_dmabuf,
+	.kunmap_atomic	= mfc_kunmap_atomic_dmabuf,
+};
+#endif
+
 #define PRINT_BUF
 #undef DEBUG_ALLOC_FREE
 
@@ -37,7 +206,11 @@ static struct list_head mfc_alloc_head[MFC_MAX_MEM_PORT_NUM];
 /* The free node list sorted by real address */
 static struct list_head mfc_free_head[MFC_MAX_MEM_PORT_NUM];
 
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
+static enum MFC_BUF_ALLOC_SCHEME buf_alloc_scheme = MBS_FIRST_FIT;
+#else
 static enum MFC_BUF_ALLOC_SCHEME buf_alloc_scheme = MBS_BEST_FIT;
+#endif
 
 /* FIXME: test locking, add locking mechanisim */
 /*
@@ -109,7 +282,7 @@ void mfc_print_buf(void)
 #endif
 }
 
-static int mfc_put_free_buf(unsigned int addr, int size, int port)
+static int mfc_put_free_buf(unsigned long addr, unsigned int size, int port)
 {
 	struct list_head *pos, *nxt;
 	struct mfc_free_buffer *free;
@@ -118,7 +291,10 @@ static int mfc_put_free_buf(unsigned int addr, int size, int port)
 	/* 0x00: not merged, 0x01: prev merged, 0x02: next merged */
 	int merged = 0x00;
 
-	mfc_dbg("addr: 0x%08x, size: %d, port: %d\n", addr, size, port);
+	if ((!size) || (port >= MFC_MAX_MEM_PORT_NUM))
+		return -EINVAL;
+
+	mfc_dbg("addr: 0x%08lx, size: %d, port: %d\n", addr, size, port);
 
 	list_for_each_safe(pos, nxt, &mfc_free_head[port]) {
 		next = list_entry(pos, struct mfc_free_buffer, list);
@@ -185,13 +361,13 @@ static int mfc_put_free_buf(unsigned int addr, int size, int port)
 	return 0;
 }
 
-static unsigned int mfc_get_free_buf(int size, int align, int port)
+static unsigned long mfc_get_free_buf(unsigned int size, int align, int port)
 {
 	struct list_head *pos, *nxt;
 	struct mfc_free_buffer *free;
 	struct mfc_free_buffer *match = NULL;
 	int align_size = 0;
-	unsigned int addr = 0;
+	unsigned long addr = 0;
 
 	mfc_dbg("size: %d, align: %d, port: %d\n",
 			size, align, port);
@@ -271,27 +447,43 @@ static unsigned int mfc_get_free_buf(int size, int align, int port)
 
 int mfc_init_buf(void)
 {
-#ifndef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifndef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	int port;
 #endif
 	int ret = 0;
 
-#ifdef CONFIG_EXYNOS4_CONTENT_PATH_PROTECTION
+#ifdef CONFIG_EXYNOS_CONTENT_PATH_PROTECTION
 	INIT_LIST_HEAD(&mfc_alloc_head[0]);
 	INIT_LIST_HEAD(&mfc_free_head[0]);
 
-	ret = mfc_put_free_buf(mfc_mem_data_base(0),
-		mfc_mem_data_size(0), 0);
+	if (mfc_put_free_buf(mfc_mem_data_base(0),
+		mfc_mem_data_size(0), 0) < 0)
+		mfc_err("failed to add free buffer: [0x%08lx: %d]\n",
+			mfc_mem_data_base(0), mfc_mem_data_size(0));
 
-	ret = mfc_put_free_buf(mfc_mem_data_base(1),
-		mfc_mem_data_size(1), 0);
+	if (mfc_put_free_buf(mfc_mem_data_base(1),
+		mfc_mem_data_size(1), 0) < 0)
+		mfc_dbg("failed to add free buffer: [0x%08lx: %d]\n",
+			mfc_mem_data_base(1), mfc_mem_data_size(1));
+
+	if (list_empty(&mfc_free_head[0]))
+		ret = -1;
+
 #else
 	for (port = 0; port < mfc_mem_count(); port++) {
 		INIT_LIST_HEAD(&mfc_alloc_head[port]);
 		INIT_LIST_HEAD(&mfc_free_head[port]);
 
-		ret = mfc_put_free_buf(mfc_mem_data_base(port),
-			mfc_mem_data_size(port), port);
+		if (mfc_put_free_buf(mfc_mem_data_base(port),
+			mfc_mem_data_size(port), port) < 0)
+			mfc_err("failed to add free buffer: [0x%08lx: %d]\n",
+				mfc_mem_data_base(port),
+				mfc_mem_data_size(port));
+	}
+
+	for (port = 0; port < mfc_mem_count(); port++) {
+		if (list_empty(&mfc_free_head[port]))
+			ret = -1;
 	}
 #endif
 
@@ -353,6 +545,13 @@ void mfc_final_buf(void)
 				kfree(alloc);
 			}
 #else
+#ifdef	CONFIG_SLP
+			if (alloc->real) {
+				cma_free(alloc->real);
+				list_del(&alloc->list);
+				kfree(alloc);
+			}
+#else
 			if (mfc_put_free_buf(alloc->real,
 				alloc->size, port) < 0) {
 
@@ -361,6 +560,7 @@ void mfc_final_buf(void)
 				list_del(&alloc->list);
 				kfree(alloc);
 			}
+#endif
 #endif
 		}
 	}
@@ -432,9 +632,9 @@ void mfc_merge_buf(void)
 
 /* FIXME: port auto select, return values */
 struct mfc_alloc_buffer *_mfc_alloc_buf(
-	struct mfc_inst_ctx *ctx, int size, int align, int flag)
+	struct mfc_inst_ctx *ctx, unsigned int size, int align, int flag)
 {
-	unsigned int addr;
+	unsigned long addr;
 	struct mfc_alloc_buffer *alloc;
 	int port = flag & 0xFFFF;
 #if defined(CONFIG_VIDEO_MFC_VCM_UMP)
@@ -443,11 +643,20 @@ struct mfc_alloc_buffer *_mfc_alloc_buf(
 #elif defined(CONFIG_S5P_VMEM)
 	int align_size = 0;
 #endif
+#ifdef CONFIG_SLP
+	struct mfc_dev *dev = ctx->dev;
+	size_t	available_size;
+	struct cma_info cma_infos;
+#ifdef CONFIG_SLP_DMABUF
+	struct mfc_dmabuf_buf *buf;
+	int flags = 0;
+#endif
+#endif
 	/*
 	unsigned long flags;
 	*/
 
-	if (size <= 0)
+	if (!size)
 		return NULL;
 
 	alloc = (struct mfc_alloc_buffer *)
@@ -463,10 +672,64 @@ struct mfc_alloc_buffer *_mfc_alloc_buf(
 	/*
 	spin_lock_irqsave(&lock, flags);
 	*/
+#ifdef CONFIG_SLP
+	if (cma_info(&cma_infos, dev->device, port ? "B" : "A")) {
+		mfc_info("failed to get CMA info of 'mfc'\n");
+		kfree(alloc);
+		return NULL;
+	}
+	available_size = cma_infos.free_size;
+	if (available_size > MAX_MEM_OFFSET) {
+		mfc_warn("<Warning> too large 'mfc' reserved memory, "
+			"size will be shrink (%d:%d)\n",
+			size >> 10, MAX_MEM_OFFSET >> 10);
+		size = MAX_MEM_OFFSET;
+	}
+	addr = cma_alloc(dev->device, port ? "B" : "A", size, align);
+	if (IS_ERR_VALUE(addr)) {
+		mfc_err("failed to get rsv. memory from CMA");
+		kfree(alloc);
+		return NULL;
+	}
+#ifdef CONFIG_SLP_DMABUF
+	buf = kzalloc(sizeof(struct mfc_dmabuf_buf), GFP_KERNEL);
+	if (!buf) {
+		mfc_err("failed to alloc mfc_dmabuf_buf");
+		kfree(alloc);
+		cma_free(addr);
+		return NULL;
+	}
+	buf->dma_addr = addr;
+	buf->size = size;
 
+	buf->export_dma_buf = dma_buf_export(buf, &mfc_dmabuf_ops,
+		buf->size, 0600);
+	if (!buf->export_dma_buf) {
+		mfc_err("fail to export dma_buf\n");
+		kfree(alloc);
+		cma_free(addr);
+		kfree(buf);
+		return NULL;
+	}
+
+	buf->export_fd = dma_buf_fd(buf->export_dma_buf, flags);
+	if (buf->export_fd < 0) {
+		mfc_err(" fail to get fd from dmabuf.\n");
+		kfree(alloc);
+		cma_free(addr);
+		kfree(buf);
+		dma_buf_put(buf->export_dma_buf);
+		return NULL;
+	}
+	alloc->dmabuf_fd = buf->export_fd;
+	atomic_inc(&buf->refcount);
+	mfc_dbg(" buf->export_fd = %d\n", buf->export_fd);
+#endif
+#else
 	addr = mfc_get_free_buf(size, align, port);
+#endif
 
-	mfc_dbg("mfc_get_free_buf: 0x%08x\n", addr);
+	mfc_dbg("mfc_get_free_buf: 0x%08lx\n", addr);
 
 	if (!addr) {
 		mfc_dbg("cannot get suitable free buffer\n");
@@ -600,7 +863,8 @@ unsigned int mfc_vcm_bind_from_others(struct mfc_inst_ctx *ctx,
 				struct mfc_buf_alloc_arg *args, int flag)
 {
 	int ret;
-	unsigned int addr, size;
+	unsigned long addr;
+	unsigned int size;
 	unsigned int secure_id = args->secure_id;
 	int port = flag & 0xFFFF;
 
@@ -638,7 +902,7 @@ unsigned int mfc_vcm_bind_from_others(struct mfc_inst_ctx *ctx,
 		mfc_dbg("cannot get suitable free buffer\n");
 		goto err_ret_alloc;
 	}
-	mfc_dbg("mfc_get_free_buf: 0x%08x\n", addr);
+	mfc_dbg("mfc_get_free_buf: 0x%08lx\n", addr);
 
 	s_res = kzalloc(sizeof(struct vcm_mmu_res), GFP_KERNEL);
 	if (!s_res) {
@@ -759,14 +1023,21 @@ int _mfc_free_buf(unsigned long real)
 					kfree(alloc);
 				}
 #else
+#ifdef	CONFIG_SLP
+				if (alloc->real) {
+					cma_free(alloc->real);
+					list_del(&alloc->list);
+					kfree(alloc);
+				}
+#else
 				if (mfc_put_free_buf(alloc->real,
 					alloc->size, port) < 0) {
-
 					mfc_err("failed to add free buffer\n");
 				} else {
 					list_del(&alloc->list);
 					kfree(alloc);
 				}
+#endif
 #endif
 				break;
 			}
@@ -815,6 +1086,13 @@ void mfc_free_buf_type(int owner, int type)
 			alloc = list_entry(pos, struct mfc_alloc_buffer, list);
 
 			if ((alloc->owner == owner) && (alloc->type == type)) {
+#ifdef	CONFIG_SLP
+				if (alloc->real) {
+					cma_free(alloc->real);
+					list_del(&alloc->list);
+					kfree(alloc);
+				}
+#else
 				if (mfc_put_free_buf(alloc->real,
 					alloc->size, port) < 0) {
 
@@ -823,6 +1101,7 @@ void mfc_free_buf_type(int owner, int type)
 					list_del(&alloc->list);
 					kfree(alloc);
 				}
+#endif
 			}
 		}
 	}
@@ -881,6 +1160,13 @@ void mfc_free_buf_inst(int owner)
 					kfree(alloc);
 				}
 #else
+#ifdef	CONFIG_SLP
+				if (alloc->real) {
+					cma_free(alloc->real);
+					list_del(&alloc->list);
+					kfree(alloc);
+				}
+#else
 				if (mfc_put_free_buf(alloc->real,
 					alloc->size, port) < 0) {
 
@@ -889,6 +1175,7 @@ void mfc_free_buf_inst(int owner)
 					list_del(&alloc->list);
 					kfree(alloc);
 				}
+#endif
 #endif
 			}
 		}
@@ -1010,4 +1297,24 @@ void *mfc_get_buf_ump_handle(unsigned long real)
 	return NULL;
 }
 #endif
+#ifdef CONFIG_SLP_DMABUF
+int mfc_get_buf_dmabuf(unsigned long real)
+{
+	struct list_head *pos, *nxt;
+	int port;
+	struct mfc_alloc_buffer *alloc;
 
+	mfc_dbg("real: 0x%08lx\n", real);
+
+	for (port = 0; port < mfc_mem_count(); port++) {
+		list_for_each_safe(pos, nxt, &mfc_alloc_head[port]) {
+			alloc = list_entry(pos, struct mfc_alloc_buffer, list);
+
+			if (alloc->real == real)
+				return alloc->dmabuf_fd;
+		}
+	}
+
+	return -EINVAL;
+}
+#endif

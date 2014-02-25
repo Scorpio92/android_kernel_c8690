@@ -17,8 +17,6 @@
 int mfc_init_pm(struct mfc_dev *mfcdev);
 void mfc_final_pm(struct mfc_dev *mfcdev);
 
-//int mfc_clock_on(void);
-//void mfc_clock_off(void);
 int mfc_clock_on(struct mfc_dev *mfcdev);
 void mfc_clock_off(struct mfc_dev *mfcdev);
 int mfc_power_on(void);

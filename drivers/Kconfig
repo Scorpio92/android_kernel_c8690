@@ -130,6 +130,4 @@ source "drivers/clocksource/Kconfig"
 
 source "drivers/smm6260_phone/Kconfig"
 
-source "drivers/gpu/mali400/Kconfig"
-
 endmenu

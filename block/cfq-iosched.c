@@ -15,6 +15,7 @@
 #include <linux/ioprio.h>
 #include <linux/blktrace_api.h>
 #include "cfq.h"
+#include "kt_save_sched.h"
 
 /*
  * tunables
@@ -2919,7 +2920,6 @@ static void changed_ioprio(struct io_context *ioc, struct cfq_io_context *cic)
 static void cfq_ioc_set_ioprio(struct io_context *ioc)
 {
 	call_for_each_cic(ioc, changed_ioprio);
-	ioc->ioprio_changed = 0;
 }
 
 static void cfq_init_cfqq(struct cfq_data *cfqd, struct cfq_queue *cfqq,
@@ -3211,8 +3211,13 @@ retry:
 		goto err_free;
 
 out:
-	smp_read_barrier_depends();
-	if (unlikely(ioc->ioprio_changed))
+	/*
+	 * test_and_clear_bit() implies a memory barrier, paired with
+	 * the wmb() in fs/ioprio.c, so the value seen for ioprio is the
+	 * new one.
+	 */
+	if (unlikely(test_and_clear_bit(IOC_CFQ_IOPRIO_CHANGED,
+					ioc->ioprio_changed)))
 		cfq_ioc_set_ioprio(ioc);
 
 #ifdef CONFIG_CFQ_GROUP_IOSCHED
@@ -4068,18 +4073,51 @@ static void *cfq_init_queue(struct request_queue *q)
 
 	INIT_WORK(&cfqd->unplug_work, cfq_kick_queue);
 
-	cfqd->cfq_quantum = cfq_quantum;
-	cfqd->cfq_fifo_expire[0] = cfq_fifo_expire[0];
-	cfqd->cfq_fifo_expire[1] = cfq_fifo_expire[1];
-	cfqd->cfq_back_max = cfq_back_max;
-	cfqd->cfq_back_penalty = cfq_back_penalty;
-	cfqd->cfq_slice[0] = cfq_slice_async;
-	cfqd->cfq_slice[1] = cfq_slice_sync;
-	cfqd->cfq_slice_async_rq = cfq_slice_async_rq;
-	cfqd->cfq_slice_idle = cfq_slice_idle;
-	cfqd->cfq_group_idle = cfq_group_idle;
-	cfqd->cfq_latency = 1;
+	load_prev_screen_on = isload_prev_screen_on();
+	if (load_prev_screen_on == 2)
+	{
+		cfqd->cfq_quantum = gsched_vars[0];
+		cfqd->cfq_fifo_expire[0] = gsched_vars[2];
+		cfqd->cfq_fifo_expire[1] = gsched_vars[1];
+		cfqd->cfq_back_max = gsched_vars[3];
+		cfqd->cfq_back_penalty = gsched_vars[4];
+		cfqd->cfq_slice[0] = gsched_vars[8];
+		cfqd->cfq_slice[1] = gsched_vars[7];
+		cfqd->cfq_slice_async_rq = gsched_vars[9];
+		cfqd->cfq_slice_idle = gsched_vars[5];
+		cfqd->cfq_group_idle = gsched_vars[6];
+		cfqd->cfq_latency = gsched_vars[10];;
+	}
+	else
+	{
+		cfqd->cfq_quantum = cfq_quantum;
+		cfqd->cfq_fifo_expire[0] = cfq_fifo_expire[0];
+		cfqd->cfq_fifo_expire[1] = cfq_fifo_expire[1];
+		cfqd->cfq_back_max = cfq_back_max;
+		cfqd->cfq_back_penalty = cfq_back_penalty;
+		cfqd->cfq_slice[0] = cfq_slice_async;
+		cfqd->cfq_slice[1] = cfq_slice_sync;
+		cfqd->cfq_slice_async_rq = cfq_slice_async_rq;
+		cfqd->cfq_slice_idle = cfq_slice_idle;
+		cfqd->cfq_group_idle = cfq_group_idle;
+		cfqd->cfq_latency = 1;
+		if (load_prev_screen_on == 0)
+		{
+			gsched_vars[0] = cfqd->cfq_quantum;
+			gsched_vars[2] = cfqd->cfq_fifo_expire[0];
+			gsched_vars[1] = cfqd->cfq_fifo_expire[1];
+			gsched_vars[3] = cfqd->cfq_back_max;
+			gsched_vars[4] = cfqd->cfq_back_penalty;
+			gsched_vars[8] = cfqd->cfq_slice[0];
+			gsched_vars[7] = cfqd->cfq_slice[1];
+			gsched_vars[9] = cfqd->cfq_slice_async_rq;
+			gsched_vars[5] = cfqd->cfq_slice_idle;
+			gsched_vars[6] = cfqd->cfq_group_idle;
+			gsched_vars[10] = 1;
+		}
+	}
 	cfqd->hw_tag = -1;
+		
 	/*
 	 * we optimistically start assuming sync ops weren't delayed in last
 	 * second, in order to have larger depth for async operations.
@@ -4148,7 +4186,7 @@ SHOW_FUNCTION(cfq_fifo_expire_sync_show, cfqd->cfq_fifo_expire[1], 1);
 SHOW_FUNCTION(cfq_fifo_expire_async_show, cfqd->cfq_fifo_expire[0], 1);
 SHOW_FUNCTION(cfq_back_seek_max_show, cfqd->cfq_back_max, 0);
 SHOW_FUNCTION(cfq_back_seek_penalty_show, cfqd->cfq_back_penalty, 0);
-SHOW_FUNCTION(cfq_slice_idle_show, cfqd->cfq_slice_idle, 1);
+SHOW_FUNCTION(cfq_slice_idle_show, cfqd->cfq_slice_idle, 0);
 SHOW_FUNCTION(cfq_group_idle_show, cfqd->cfq_group_idle, 1);
 SHOW_FUNCTION(cfq_slice_sync_show, cfqd->cfq_slice[1], 1);
 SHOW_FUNCTION(cfq_slice_async_show, cfqd->cfq_slice[0], 1);
@@ -4156,7 +4194,7 @@ SHOW_FUNCTION(cfq_slice_async_rq_show, cfqd->cfq_slice_async_rq, 0);
 SHOW_FUNCTION(cfq_low_latency_show, cfqd->cfq_latency, 0);
 #undef SHOW_FUNCTION
 
-#define STORE_FUNCTION(__FUNC, __PTR, MIN, MAX, __CONV)			\
+#define STORE_FUNCTION(__FUNC, __PTR, MIN, MAX, __CONV, NDX)		\
 static ssize_t __FUNC(struct elevator_queue *e, const char *page, size_t count)	\
 {									\
 	struct cfq_data *cfqd = e->elevator_data;			\
@@ -4170,23 +4208,24 @@ static ssize_t __FUNC(struct elevator_queue *e, const char *page, size_t count)	
 		*(__PTR) = msecs_to_jiffies(__data);			\
 	else								\
 		*(__PTR) = __data;					\
+	gsched_vars[NDX] = __data;					\
 	return ret;							\
 }
-STORE_FUNCTION(cfq_quantum_store, &cfqd->cfq_quantum, 1, UINT_MAX, 0);
+STORE_FUNCTION(cfq_quantum_store, &cfqd->cfq_quantum, 1, UINT_MAX, 0, 0);
 STORE_FUNCTION(cfq_fifo_expire_sync_store, &cfqd->cfq_fifo_expire[1], 1,
-		UINT_MAX, 1);
+		UINT_MAX, 1, 1);
 STORE_FUNCTION(cfq_fifo_expire_async_store, &cfqd->cfq_fifo_expire[0], 1,
-		UINT_MAX, 1);
-STORE_FUNCTION(cfq_back_seek_max_store, &cfqd->cfq_back_max, 0, UINT_MAX, 0);
+		UINT_MAX, 1, 2);
+STORE_FUNCTION(cfq_back_seek_max_store, &cfqd->cfq_back_max, 0, UINT_MAX, 0, 3);
 STORE_FUNCTION(cfq_back_seek_penalty_store, &cfqd->cfq_back_penalty, 1,
-		UINT_MAX, 0);
-STORE_FUNCTION(cfq_slice_idle_store, &cfqd->cfq_slice_idle, 0, UINT_MAX, 1);
-STORE_FUNCTION(cfq_group_idle_store, &cfqd->cfq_group_idle, 0, UINT_MAX, 1);
-STORE_FUNCTION(cfq_slice_sync_store, &cfqd->cfq_slice[1], 1, UINT_MAX, 1);
-STORE_FUNCTION(cfq_slice_async_store, &cfqd->cfq_slice[0], 1, UINT_MAX, 1);
+		UINT_MAX, 0, 4);
+STORE_FUNCTION(cfq_slice_idle_store, &cfqd->cfq_slice_idle, 0, UINT_MAX, 0, 5);
+STORE_FUNCTION(cfq_group_idle_store, &cfqd->cfq_group_idle, 0, UINT_MAX, 1, 6);
+STORE_FUNCTION(cfq_slice_sync_store, &cfqd->cfq_slice[1], 1, UINT_MAX, 1, 7);
+STORE_FUNCTION(cfq_slice_async_store, &cfqd->cfq_slice[0], 1, UINT_MAX, 1, 8);
 STORE_FUNCTION(cfq_slice_async_rq_store, &cfqd->cfq_slice_async_rq, 1,
-		UINT_MAX, 0);
-STORE_FUNCTION(cfq_low_latency_store, &cfqd->cfq_latency, 0, 1, 0);
+		UINT_MAX, 0, 9);
+STORE_FUNCTION(cfq_low_latency_store, &cfqd->cfq_latency, 0, 1, 0, 10);
 #undef STORE_FUNCTION
 
 #define CFQ_ATTR(name) \
