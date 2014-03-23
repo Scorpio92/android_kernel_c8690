@@ -711,7 +711,18 @@ static int exynos_cpufreq_cpu_init(struct cpufreq_policy *policy)
 		cpumask_setall(policy->cpus);
 	}
 
-	return cpufreq_frequency_table_cpuinfo(policy, exynos_info->freq_table);
+cpufreq_frequency_table_cpuinfo(policy, exynos_info->freq_table);
+
+	/* Keep stock frq. as default startup frq. */
+#ifdef CONFIG_EXYNOS_CPU_FREQ_SET_MIN_MAX
+	policy->max = CONFIG_EXYNOS_CPU_FREQ_MAX;
+	policy->min = CONFIG_EXYNOS_CPU_FREQ_MIN;
+#else
+	policy->max = 1400000;
+	policy->min = 200000;
+#endif
+
+	return 0;
 }
 
 static int exynos_cpufreq_reboot_notifier_call(struct notifier_block *this,
