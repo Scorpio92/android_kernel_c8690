@@ -108,6 +108,36 @@ static ssize_t wait_for_fb_wake_show(struct kobject *kobj,
 	return s - buf;
 }
 
+static ssize_t fbdelay_show(struct kobject *kobj,
+          struct kobj_attribute *attr, char *buf)
+{
+  return sprintf(buf, "%d", fbearlysuspend_delay);
+}
+
+static ssize_t fbearlysuspend_delay_show(struct kobject *kobj,
+          struct kobj_attribute *attr, char *buf)
+{
+  return sprintf(buf, "%d", fbearlysuspend_delay);
+}
+
+static ssize_t fbearlysuspend_delay_store(struct kobject *kobj,
+           struct kobj_attribute *attr,
+           const char *buf, size_t n)
+{
+  int val;
+  if (sscanf(buf, "%d", &val) != 1)
+    return -EINVAL;
+
+  if(val > 1000)
+    val = 1000;
+  if(val < 0)
+    val = 0;
+  
+  fbearlysuspend_delay = val;
+  
+  return n;
+} 
+
 #define power_ro_attr(_name) \
 static struct kobj_attribute _name##_attr = {	\
 	.attr	= {				\
@@ -120,10 +150,12 @@ static struct kobj_attribute _name##_attr = {	\
 
 power_ro_attr(wait_for_fb_sleep);
 power_ro_attr(wait_for_fb_wake);
+power_attr(fbearlysuspend_delay);
 
 static struct attribute *g[] = {
 	&wait_for_fb_sleep_attr.attr,
 	&wait_for_fb_wake_attr.attr,
+	&fbearlysuspend_delay_attr.attr,
 	NULL,
 };
 
