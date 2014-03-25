@@ -62,7 +62,7 @@ static u32 system_info_size = 0;
 static u32 first_pp_offset = 0;
 
 #define HANG_CHECK_MSECS_DEFAULT 500 /* 500 ms */
-#define WATCHDOG_MSECS_DEFAULT 4000 /* 4 s */
+#define WATCHDOG_MSECS_DEFAULT 5000 /* 4 s */
 
 /* timer related */
 int mali_max_job_runtime = WATCHDOG_MSECS_DEFAULT;
