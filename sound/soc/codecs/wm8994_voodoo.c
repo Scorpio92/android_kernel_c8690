@@ -2087,7 +2087,7 @@ unsigned int voodoo_hook_wm8994_write(struct snd_soc_codec *codec_,
 	codec = codec_;
 #ifdef Exynos4
 	//in-call detection
-	if( reg == WM8994_AIF2_CONTROL_2 )
+	if( reg == WM8994_AIF2_CONTROL_2 || reg == WM8994_AIF2_CONTROL_1 )
 	{
 		if(value & WM8994_AIF2DACR_SRC_MASK)
 			codec_state &= ~CALL_ACTIVE;
