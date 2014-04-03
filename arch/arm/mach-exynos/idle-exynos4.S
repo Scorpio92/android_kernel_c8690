@@ -76,6 +76,7 @@ ENTRY(exynos4_enter_lp)
 	mov	r1, #0
 	mov	r2, #0
 	mov	r3, #0
+	.arch_extension sec
 	smc	0
 #else
 	dsb
