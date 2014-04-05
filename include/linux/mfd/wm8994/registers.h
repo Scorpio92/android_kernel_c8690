@@ -26,6 +26,7 @@
 #define WM8994_POWER_MANAGEMENT_5               0x05
 #define WM8994_POWER_MANAGEMENT_6               0x06
 #define WM8994_INPUT_MIXER_1                    0x15
+#define WM8994_IN1L_VU                          0x16
 #define WM8994_LEFT_LINE_INPUT_1_2_VOLUME       0x18
 #define WM8994_LEFT_LINE_INPUT_3_4_VOLUME       0x19
 #define WM8994_RIGHT_LINE_INPUT_1_2_VOLUME      0x1A

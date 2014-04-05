@@ -39,6 +39,7 @@
 
 #include "wm8994.h"
 #include "wm_hubs.h"
+#include "boeffla_sound.h"
 
 #include <linux/gpio.h>
 #include <plat/gpio-cfg.h>
@@ -176,6 +177,7 @@ int wm8994_write(struct snd_soc_codec *codec, unsigned int reg,
 #ifdef CONFIG_SND_VOODOO
 	value = voodoo_hook_wm8994_write(codec, reg, value);
 #endif
+    value = Boeffla_sound_hook_wm8994_write(reg, value);
 
 	if (!wm8994_volatile(codec, reg)) {
 		ret = snd_soc_cache_write(codec, reg, value);
@@ -3990,6 +3992,8 @@ static int wm8994_codec_probe(struct snd_soc_codec *codec)
 #ifdef CONFIG_SND_VOODOO
 	voodoo_hook_wm8994_pcm_probe(codec);
 #endif
+
+    Boeffla_sound_hook_wm8994_pcm_probe(codec);
 
 	return 0;
 
