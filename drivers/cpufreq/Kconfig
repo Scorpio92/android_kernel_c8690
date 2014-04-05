@@ -123,6 +123,10 @@ config CPU_FREQ_DEFAULT_GOV_PEGASUSQ
 	bool "pegasusq"
 	select CPU_FREQ_GOV_PEGASUSQ
 
+config CPU_FREQ_DEFAULT_GOV_PEGASUSQPLUS
+	bool "pegasusqplus"
+	select CPU_FREQ_GOV_PEGASUSQPLUS
+
 config CPU_FREQ_DEFAULT_GOV_ZZMOOVE
           bool "zzmoove"
           select CPU_FREQ_GOV_ZZMOOVE
@@ -344,6 +348,9 @@ config CPU_FREQ_GOV_ADAPTIVE
 
 config CPU_FREQ_GOV_PEGASUSQ
 	tristate "'pegasusq' cpufreq policy governor"
+
+config CPU_FREQ_GOV_PEGASUSQPLUS
+	tristate "'pegasusqplus' cpufreq policy governor"
 
 config CPU_FREQ_GOV_ZZMOOVE
         tristate "'zzmoove' cpufreq governor"
