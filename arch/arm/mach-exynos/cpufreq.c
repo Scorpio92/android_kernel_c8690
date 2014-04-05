@@ -833,3 +833,17 @@ err_vdd_arm:
 	return -EINVAL;
 }
 late_initcall(exynos_cpufreq_init);
+
+/* sysfs interface for ASV level */
+ssize_t show_asv_level(struct cpufreq_policy *policy, char *buf) {
+
+	return sprintf(buf, "ASV level: %d\n",exynos_result_of_asv); 
+
+}
+
+extern ssize_t store_asv_level(struct cpufreq_policy *policy,
+                                      const char *buf, size_t count) {
+
+	// the store function does not do anything
+	return count;
+}

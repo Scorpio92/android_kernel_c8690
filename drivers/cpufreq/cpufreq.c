@@ -563,6 +563,11 @@ extern ssize_t store_UV_uV_table(struct cpufreq_policy *policy,
 extern ssize_t show_UV_mV_table(struct cpufreq_policy *policy, char *buf);
 extern ssize_t show_UV_uV_table(struct cpufreq_policy *policy, char *buf);
 
+/* sysfs interface for ASV level */
+extern ssize_t show_asv_level(struct cpufreq_policy *policy, char *buf);
+extern ssize_t store_asv_level(struct cpufreq_policy *policy,
+                                      const char *buf, size_t count);
+
 /**
  * show_scaling_driver - show the current cpufreq HW/BIOS limitation
  */
@@ -595,6 +600,8 @@ cpufreq_freq_attr_rw(scaling_setspeed);
 //for voltage control interface
 cpufreq_freq_attr_rw(UV_mV_table);
 cpufreq_freq_attr_rw(UV_uV_table);
+/* ASV level */
+cpufreq_freq_attr_rw(asv_level);
 
 static struct attribute *default_attrs[] = {
 	&cpuinfo_min_freq.attr,
@@ -611,6 +618,7 @@ static struct attribute *default_attrs[] = {
 	//for voltage control interface
 	&UV_mV_table.attr,
 	&UV_uV_table.attr,
+    &asv_level.attr,
 	NULL
 };
 
