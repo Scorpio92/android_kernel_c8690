@@ -784,19 +784,11 @@ static void exynos4x12_set_frequency(unsigned int old_index,
 		if (exynos4x12_volt_table[new_index] >= 950000 &&
 				need_dynamic_ema)
 				__raw_writel(0x101, EXYNOS4_EMA_CONF);
-#ifdef CONFIG_EXYNOS4X12_1800MHZ_SUPPORT
-		if ((samsung_rev() >= EXYNOS4412_REV_2_0)
-			&& (exynos_result_of_asv > 2)
-			&& (old_index > L10) && (new_index <= L10)) {
-			exynos4x12_set_abb_member(ABB_ARM, ABB_MODE_130V);
-		}
-#else
         if ((samsung_rev() >= EXYNOS4412_REV_2_0)
 			&& (exynos_result_of_asv > 2)
-			&& (old_index > L9) && (new_index <= L9)) {
+			&& (old_index > L8) && (new_index <= L8)) {
 			exynos4x12_set_abb_member(ABB_ARM, ABB_MODE_130V);
 		}
-#endif
 
 		if (!exynos4x12_pms_change(old_index, new_index)) {
 			/* 1. Change the system clock divider values */
@@ -830,19 +822,13 @@ static void exynos4x12_set_frequency(unsigned int old_index,
 			/* 2. Change the system clock divider values */
 			set_clkdiv(new_index);
 		}
-#ifdef CONFIG_EXYNOS4X12_1800MHZ_SUPPORT
+
 		if ((samsung_rev() >= EXYNOS4412_REV_2_0)
 			&& (exynos_result_of_asv > 2)
-			&& (old_index <= L10) && (new_index > L10)) {
+			&& (old_index <= L8) && (new_index > L8)) {
 			exynos4x12_set_abb_member(ABB_ARM, ABB_MODE_100V);
 		}
-#else
-		if ((samsung_rev() >= EXYNOS4412_REV_2_0)
-			&& (exynos_result_of_asv > 2)
-			&& (old_index <= L9) && (new_index > L9)) {
-			exynos4x12_set_abb_member(ABB_ARM, ABB_MODE_100V);
-		}
-#endif
+
 		if (exynos4x12_volt_table[new_index] < 950000 &&
 				need_dynamic_ema)
 			__raw_writel(0x404, EXYNOS4_EMA_CONF);
@@ -906,20 +892,37 @@ static void __init set_volt_table(void)
 		if (tmp) {
 			pr_info("%s : special flag[%d]\n", __func__, tmp);
 			switch (tmp) {
+#ifdef CONFIG_EXYNOS4X12_1800MHZ_SUPPORT
 			case 1:
 				/* 500MHz fixed volt */
-				i = L11;
+				i = L13;
 				break;
 			case 2:
 				/* 700MHz fixed volt */
-				i = L9;
+				i = L11;
 				break;
 			case 3:
 				/* 800MHz fixed volt */
-				i = L8;
+				i = L10;
 				break;
 			default:
 				break;
+#else
+			case 1:
+				/* 500MHz fixed volt */
+				i = L12;
+				break;
+			case 2:
+				/* 700MHz fixed volt */
+				i = L10;
+				break;
+			case 3:
+				/* 800MHz fixed volt */
+				i = L9;
+				break;
+			default:
+				break;
+#endif
 			}
 
 			pr_info("ARM voltage locking at L%d\n", i);
