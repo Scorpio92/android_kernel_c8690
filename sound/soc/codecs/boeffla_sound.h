@@ -1,9 +1,7 @@
 /*
- * Author: andip71, 14.01.2014
- * 
- * Modifications: Yank555.lu 20.08.2013
+ * Author: andip71, 26.02.2013
  *
- * Version 1.6.5
+ * Version 1.6.0
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -30,8 +28,8 @@ unsigned int Boeffla_sound_hook_wm8994_write(unsigned int reg, unsigned int valu
 /*****************************************/
 
 // Boeffla sound general
-#define BOEFFLA_SOUND_DEFAULT 	0
-#define BOEFFLA_SOUND_VERSION 	"1.6.5"
+#define BOEFFLA_SOUND_DEFAULT 	1
+#define BOEFFLA_SOUND_VERSION 	"1.6.0"
 
 // Debug mode
 #define DEBUG_DEFAULT 		1
@@ -142,7 +140,7 @@ unsigned int Boeffla_sound_hook_wm8994_write(unsigned int reg, unsigned int valu
 #define SPEAKER_DEFAULT 	57
 
 #define SPEAKER_MAX 		63
-#define SPEAKER_MIN 		20
+#define SPEAKER_MIN 		57
 
 // Microphone control
 #define MICLEVEL_GENERAL	28
@@ -158,8 +156,3 @@ unsigned int Boeffla_sound_hook_wm8994_write(unsigned int reg, unsigned int valu
 // General switches
 #define ON 	1
 #define OFF 	0
-
-// Change delay
-#define DEFAULT_CHANGE_DELAY	2000000
-#define MIN_CHANGE_DELAY	0
-#define MAX_CHANGE_DELAY	5000000
