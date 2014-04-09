@@ -13,6 +13,7 @@ obj-$(CONFIG_ARCH_S5PV210)	+= s3cfb_fimd6x.o
 obj-$(CONFIG_ARCH_EXYNOS4)	+= s3cfb_fimd6x.o
 
 obj-$(CONFIG_FB_S5P_MDNIE)      += s3cfb_mdnie.o s3cfb_ielcd.o mdnie.o mdnie_tunning.o
+obj-$(CONFIG_FB_S5P_MDNIE_CONTROL)      += mdnie_control.o
 endif
 
 ifeq ($(CONFIG_FB_S5P_DEBUG),y)
