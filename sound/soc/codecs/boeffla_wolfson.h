@@ -1,0 +1,6 @@
+#define DEBUG_DEFAULT 		DEBUG_OFF
+#define EQ_DEFAULT 		0
+#define HEADPHONE_MIN 		20
+#define SPEAKER_MIN 		20
+
+

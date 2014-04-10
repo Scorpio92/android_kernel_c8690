@@ -17,7 +17,7 @@
 #define MICLEVEL_MIN		0
 #define MICLEVEL_MAX		31
 
-#if defined(CONFIG_MACH_SMDK4X12) 
+#if defined(CONFIG_MACH_SMDK4X12)
 #define GALAXY_S3
 #endif
 #if defined(CONFIG_MACH_HERRING) || defined (CONFIG_SAMSUNG_GALAXYS)	       \

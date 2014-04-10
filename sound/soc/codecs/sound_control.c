@@ -35,8 +35,17 @@
 #include "wm8994.h"
 
 #include "sound_control.h"
+#include "boeffla_wolfson.h"
 
 #include <mach/media_monitor.h>
+
+// Debug mode
+enum {
+	DEBUG_OFF = 0,
+	DEBUG_NORMAL,
+	DEBUG_VERBOSE,
+	DEBUG_MAX,
+};
 
 /*****************************************/
 // Static variables
@@ -294,7 +303,7 @@ static int wm8994_write(struct snd_soc_codec *codec, unsigned int reg,
 	return wm8994_reg_write(codec->control_data, reg, value);
 }
 
-bool check_for_dapm(enum snd_soc_dapm_type dapm_type, char* widget_name)
+bool check_for_dapm_wolfson(enum snd_soc_dapm_type dapm_type, char* widget_name)
 {
 	struct snd_soc_dapm_widget *w;
 
@@ -313,22 +322,22 @@ bool check_for_dapm(enum snd_soc_dapm_type dapm_type, char* widget_name)
 
 bool check_for_fmradio(void) 
 {
-	return check_for_dapm(snd_soc_dapm_line, "FM In");
+	return check_for_dapm_wolfson(snd_soc_dapm_line, "FM In");
 }
 
 bool check_for_receiver(void) 
 {
-	return check_for_dapm(snd_soc_dapm_spk, "RCV");
+	return check_for_dapm_wolfson(snd_soc_dapm_spk, "RCV");
 }
 
 bool check_for_speaker(void) 
 {
-	return check_for_dapm(snd_soc_dapm_spk, "SPK");
+	return check_for_dapm_wolfson(snd_soc_dapm_spk, "SPK");
 }
 
 bool check_for_headphone(void)
 {
-//	return check_for_dapm(snd_soc_dapm_hp, "HP");
+//	return check_for_dapm_wolfson(snd_soc_dapm_hp, "HP");
 	if( wm8994->micdet[0].jack != NULL )
 	{
 		if ((wm8994->micdet[0].jack->status & SND_JACK_HEADPHONE) ||
