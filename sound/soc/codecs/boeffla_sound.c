@@ -1034,11 +1034,11 @@ static void set_dac_direct(void)
 	// get current values for output mixers 1 and 2 (l + r) from audio hub
 	// modify the data accordingly and write back to audio hub
 	val = wm8994_read(codec, WM8994_OUTPUT_MIXER_1);
-	val = get_dac_direct_l(val);
+	//val = get_dac_direct_l(val);
 	wm8994_write(codec, WM8994_OUTPUT_MIXER_1, val);
 
 	val = wm8994_read(codec, WM8994_OUTPUT_MIXER_2);
-	val = get_dac_direct_r(val);
+	//val = get_dac_direct_r(val);
 	wm8994_write(codec, WM8994_OUTPUT_MIXER_2, val);
 
 	// take value of the right channel as reference, check for the bypass bit
@@ -1058,8 +1058,10 @@ static unsigned int get_dac_direct_l(unsigned int val)
 {
 	// dac direct is only enabled if fm radio is not active
 	if ((dac_direct == ON) && (!is_fmradio))
+	{
 		// enable dac_direct: bypass for both channels, mute output mixer
 		return((val & ~WM8994_DAC1L_TO_MIXOUTL) | WM8994_DAC1L_TO_HPOUT1L);
+	}
 
 	// disable dac_direct: enable bypass for both channels, mute output mixer
 	return((val & ~WM8994_DAC1L_TO_HPOUT1L) | WM8994_DAC1L_TO_MIXOUTL);
@@ -1069,8 +1071,10 @@ static unsigned int get_dac_direct_r(unsigned int val)
 {
 	// dac direct is only enabled if fm radio is not active
 	if ((dac_direct == ON) && (!is_fmradio))
+	{
 		// enable dac_direct: bypass for both channels, mute output mixer
 		return((val & ~WM8994_DAC1R_TO_MIXOUTR) | WM8994_DAC1R_TO_HPOUT1R);
+	}
 
 	// disable dac_direct: enable bypass for both channels, mute output mixer
 	return((val & ~WM8994_DAC1R_TO_HPOUT1R) | WM8994_DAC1R_TO_MIXOUTR);
