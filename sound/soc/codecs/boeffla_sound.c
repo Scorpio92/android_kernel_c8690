@@ -570,7 +570,8 @@ static void set_headphone(void)
 
 	val = wm8994_read(codec, WM8994_RIGHT_OUTPUT_VOLUME);
 	val = (val & ~WM8994_HPOUT1R_VOL_MASK) | headphone_r;
-        wm8994_write(codec, WM8994_RIGHT_OUTPUT_VOLUME, val | WM8994_HPOUT1_VU);
+        //wm8994_write(codec, WM8994_RIGHT_OUTPUT_VOLUME, val | WM8994_HPOUT1_VU);
+        wm8994_write(codec, WM8994_RIGHT_OUTPUT_VOLUME, val);
 
 	// print debug info
 	if (debug(DEBUG_NORMAL))
