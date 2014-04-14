@@ -127,7 +127,7 @@ unsigned int Boeffla_sound_hook_wm8994_write(unsigned int reg, unsigned int valu
 #define FLL_LOOP_GAIN_TUNED	5
 
 // Stereo expansion
-#define STEREO_EXPANSION_GAIN_DEFAULT	0
+#define STEREO_EXPANSION_GAIN_DEFAULT	11
 #define STEREO_EXPANSION_GAIN_OFF		0
 #define STEREO_EXPANSION_GAIN_MIN		0
 #define STEREO_EXPANSION_GAIN_MAX		31
