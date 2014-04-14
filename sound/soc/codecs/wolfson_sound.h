@@ -32,7 +32,7 @@ unsigned int Wolfson_sound_hook_wm8994_write(unsigned int reg, unsigned int valu
 #define WOLFSON_SOUND_VERSION 	"1.6.0"
 
 // Debug mode
-#define DEBUG_DEFAULT 		1
+//#define DEBUG_DEFAULT 		1
 
 #define DEBUG_OFF 		0
 #define DEBUG_NORMAL 		1
@@ -42,7 +42,7 @@ unsigned int Wolfson_sound_hook_wm8994_write(unsigned int reg, unsigned int valu
 #define DEBUG_REGISTER_KEY 	66
 
 // EQ mode
-#define EQ_DEFAULT 		0
+//#define EQ_DEFAULT 		0
 
 #define EQ_OFF			0
 #define EQ_NORMAL		1
@@ -125,7 +125,7 @@ unsigned int Wolfson_sound_hook_wm8994_write(unsigned int reg, unsigned int valu
 #define FLL_LOOP_GAIN_TUNED	5
 
 // Stereo expansion
-#define STEREO_EXPANSION_GAIN_DEFAULT	0
+//#define STEREO_EXPANSION_GAIN_DEFAULT	0
 #define STEREO_EXPANSION_GAIN_OFF		0
 #define STEREO_EXPANSION_GAIN_MIN		0
 #define STEREO_EXPANSION_GAIN_MAX		31
@@ -134,13 +134,13 @@ unsigned int Wolfson_sound_hook_wm8994_write(unsigned int reg, unsigned int valu
 #define HEADPHONE_DEFAULT 	50
 
 #define HEADPHONE_MAX 		63
-#define HEADPHONE_MIN 		20
+//#define HEADPHONE_MIN 		20
 
 // speaker levels
 #define SPEAKER_DEFAULT 	57
 
 #define SPEAKER_MAX 		63
-#define SPEAKER_MIN 		57
+//#define SPEAKER_MIN 		57
 
 // Microphone control
 #define MICLEVEL_GENERAL	28

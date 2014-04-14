@@ -2,5 +2,6 @@
 #define EQ_DEFAULT 		0
 #define HEADPHONE_MIN 		20
 #define SPEAKER_MIN 		20
+#define STEREO_EXPANSION_GAIN_DEFAULT	11
 
 

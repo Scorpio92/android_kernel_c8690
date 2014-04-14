@@ -34,6 +34,7 @@
 #include "wm8994.h"
 
 #include "wolfson_sound.h"
+#include "boeffla_wolfson.h"
 
 
 /*****************************************/
@@ -180,10 +181,10 @@ unsigned int Wolfson_sound_hook_wm8994_write(unsigned int reg, unsigned int val)
 	newval = val;
 
 	/* Headphone plug-in detection */
-	handler_output_detection();
+	//handler_output_detection();
 
 	/* FM Radio detection, if active, DAC Direct hooks below will override */
-	is_fmradio = check_for_fmradio();
+	//is_fmradio = check_for_fmradio();
 
 	// based on the register, do the appropriate processing
 	switch (reg)
@@ -1023,11 +1024,11 @@ static void set_dac_direct(void)
 	// get current values for output mixers 1 and 2 (l + r) from audio hub
 	// modify the data accordingly and write back to audio hub
 	val = wm8994_read(codec, WM8994_OUTPUT_MIXER_1);
-	val = get_dac_direct_l(val);
+	//val = get_dac_direct_l(val);
 	wm8994_write(codec, WM8994_OUTPUT_MIXER_1, val);
 
 	val = wm8994_read(codec, WM8994_OUTPUT_MIXER_2);
-	val = get_dac_direct_r(val);
+	//val = get_dac_direct_r(val);
 	wm8994_write(codec, WM8994_OUTPUT_MIXER_2, val);
 
 	// take value of the right channel as reference, check for the bypass bit
