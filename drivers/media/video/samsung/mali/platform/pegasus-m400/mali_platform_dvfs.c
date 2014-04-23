@@ -108,27 +108,27 @@ mali_dvfs_staycount_table mali_dvfs_staycount[MALI_DVFS_STEPS]={
 // L4 = 266Mhz, 0.875V
 
 int step0_clk = 266;
-int step0_vol = 875000;
+int step0_vol = 850000;
 #if (MALI_DVFS_STEPS > 1)
 int step1_clk = 350;
-int step1_vol = 900000;
-int step0_up = 20;
-int step1_down = 15;
+int step1_vol = 875000;
+int step0_up = 70;
+int step1_down = 62;
 #if (MALI_DVFS_STEPS > 2)
 int step2_clk = 440;
 int step2_vol = 950000;
-int step1_up = 35;
-int step2_down = 30;
+int step1_up = 90;
+int step2_down = 85;
 #if (MALI_DVFS_STEPS > 3)
 int step3_clk = 533;
-int step3_vol = 1025000;
-int step2_up = 55;
-int step3_down = 50;
+int step3_vol = 1000000;
+int step2_up = 90;
+int step3_down = 85;
 #if (MALI_DVFS_STEPS > 4)
 int step4_clk = 640;
-int step4_vol = 1075000;
-int step3_up = 75;
-int step4_down = 70;
+int step4_vol = 1050000;
+int step3_up = 90;
+int step4_down = 95;
 #endif
 #endif
 #endif
@@ -158,15 +158,15 @@ mali_dvfs_table mali_dvfs[MALI_DVFS_STEPS]={
 };
 
 mali_dvfs_threshold_table mali_dvfs_threshold[MALI_DVFS_STEPS]={
-	{0   , 19},
+	{0   , 70},
 #if (MALI_DVFS_STEPS > 1)
-	{20  , 34},
+	{62  , 90},
 #if (MALI_DVFS_STEPS > 2)
-	{35  , 54},
+	{85  , 90},
 #if (MALI_DVFS_STEPS > 3)
-	{55  ,74},
+	{85  , 90},
 #if (MALI_DVFS_STEPS > 4)
-	{75  ,100}
+	{95  ,100}
 #endif
 #endif
 #endif
@@ -190,13 +190,13 @@ static unsigned int asv_3d_volt_9_table_1ghz_type[MALI_DVFS_STEPS-1][ASV_LEVEL] 
 };
 
 static unsigned int asv_3d_volt_9_table[MALI_DVFS_STEPS-1][ASV_LEVEL] = {
-	{  950000,  925000,  900000,  900000,  875000,  875000,  875000,  875000,  850000,  850000,  850000,  850000},  /* L3(160Mhz) */
+	{  950000,  925000,  875000,  900000,  875000,  875000,  875000,  875000,  850000,  850000,  850000,  850000},  /* L3(160Mhz) */
 #if (MALI_DVFS_STEPS > 1)
-	{  975000,  950000,  925000,  925000,  925000,  900000,  900000,  875000,  875000,  875000,  875000,  850000},  /* L2(266Mhz) */
+	{  975000,  950000,  900000,  925000,  925000,  900000,  900000,  875000,  875000,  875000,  875000,  850000},  /* L2(266Mhz) */
 #if (MALI_DVFS_STEPS > 2)
-	{ 1050000, 1025000, 1000000, 1000000,  975000,  950000,  950000,  950000,  925000,  925000,  925000,  900000},  /* L1(350Mhz) */
+	{ 1050000, 1025000, 975000, 1000000,  975000,  950000,  950000,  950000,  925000,  925000,  925000,  900000},  /* L1(350Mhz) */
 #if (MALI_DVFS_STEPS > 3)
-	{ 1100000, 1075000, 1050000, 1050000, 1050000, 1025000, 1025000, 1000000, 1000000, 1000000,  975000,  950000},  /* L0(440Mhz) */
+	{ 1100000, 1075000, 1025000, 1050000, 1050000, 1025000, 1025000, 1000000, 1000000, 1000000,  975000,  950000},  /* L0(440Mhz) */
 #endif
 #endif
 #endif
