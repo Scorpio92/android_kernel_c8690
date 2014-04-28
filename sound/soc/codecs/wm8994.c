@@ -103,7 +103,10 @@ static int wm8994_retune_mobile_base[] = {
 
 static struct snd_soc_codec *g_codec;
 
-static int wm8994_readable(struct snd_soc_codec *codec, unsigned int reg)
+#ifndef CONFIG_SND_WOLFSON_SOUND_CONTROL
+static
+#endif
+int wm8994_readable(struct snd_soc_codec *codec, unsigned int reg)
 {
 	struct wm8994_priv *wm8994 = snd_soc_codec_get_drvdata(codec);
 	struct wm8994 *control = wm8994->control_data;
@@ -142,7 +145,10 @@ static int wm8994_readable(struct snd_soc_codec *codec, unsigned int reg)
 	return wm8994_access_masks[reg].readable != 0;
 }
 
-static int wm8994_volatile(struct snd_soc_codec *codec, unsigned int reg)
+#ifndef CONFIG_SND_WOLFSON_SOUND_CONTROL
+static
+#endif
+int wm8994_volatile(struct snd_soc_codec *codec, unsigned int reg)
 {
 	if (reg >= WM8994_CACHE_SIZE)
 		return 1;
@@ -163,11 +169,35 @@ static int wm8994_volatile(struct snd_soc_codec *codec, unsigned int reg)
 	}
 }
 
-int wm8994_write(struct snd_soc_codec *codec, unsigned int reg,
+#ifdef CONFIG_SND_VOODOO
+#include "wm8994_voodoo.h"
+#endif
+
+#ifdef CONFIG_SND_BOEFFLA
+#include "boeffla_sound.h"
+#endif
+
+#ifdef CONFIG_SND_WOLFSON_SOUND_CONTROL
+#include "wolfson_sound.h"
+#endif
+
+static int wm8994_write(struct snd_soc_codec *codec, unsigned int reg,
 	unsigned int value)
 {
 	int ret;
 	BUG_ON(reg > WM8994_MAX_REGISTER);
+
+#ifdef CONFIG_SND_VOODOO
+	value = voodoo_hook_wm8994_write(codec, reg, value);
+#endif
+
+#ifdef CONFIG_SND_BOEFFLA
+	value = Boeffla_sound_hook_wm8994_write(reg, value);
+#endif
+
+#ifdef CONFIG_SND_WOLFSON_SOUND_CONTROL
+	value = Wolfson_sound_hook_wm8994_write(reg, value);
+#endif
 
 	if (!wm8994_volatile(codec, reg)) {
 		ret = snd_soc_cache_write(codec, reg, value);
@@ -176,11 +206,14 @@ int wm8994_write(struct snd_soc_codec *codec, unsigned int reg,
 				reg, ret);
 	}
 	
-	dev_info(codec->dev, "0x%04x <- 0x%04x\n", reg, value);		// zsb
+	//dev_info(codec->dev, "0x%04x <- 0x%04x\n", reg, value);		// zsb
 	
 	return wm8994_reg_write(codec->control_data, reg, value);
 }
 
+#ifndef CONFIG_SND_WOLFSON_SOUND_CONTROL
+static
+#endif
 unsigned int wm8994_read(struct snd_soc_codec *codec,
 				unsigned int reg)
 {
@@ -209,7 +242,7 @@ static int configure_aif_clock(struct snd_soc_codec *codec, int aif)
 	int reg1 = 0;
 	int offset;
 
-	dprintk("[zsb] configure_aif_clock aif : %d, sysclk : %d\n", aif, wm8994->sysclk[aif]);
+	//dprintk("[zsb] configure_aif_clock aif : %d, sysclk : %d\n", aif, wm8994->sysclk[aif]);
 	
 	if (aif)
 		offset = 4;
@@ -266,7 +299,7 @@ static int configure_clock(struct snd_soc_codec *codec)
 	struct wm8994_priv *wm8994 = snd_soc_codec_get_drvdata(codec);
 	int old, new;
 
-	dprintk("[zsb] configure_clock\n");
+	//dprintk("[zsb] configure_clock\n");
 
 	/* Bring up the AIF clocks first */
 	configure_aif_clock(codec, 0);
@@ -809,7 +842,7 @@ SOC_SINGLE_TLV("SPKR DAC1 Volume", WM8994_SPKMIXR_ATTENUATION,
 	       2, 1, 1, wm_hubs_spkmix_tlv),
 //modify by TerryHuang for 3d parameters in spec
 SOC_SINGLE_TLV("AIF1DAC1 3D Stereo Volume", WM8994_AIF1_DAC1_FILTERS_2,
-	       9, 31, 0, wm8994_3d_tlv),
+	       10, 15, 0, wm8994_3d_tlv),
 SOC_SINGLE("AIF1DAC1 3D Stereo Switch", WM8994_AIF1_DAC1_FILTERS_2,
 	   8, 1, 0),
 SOC_SINGLE_TLV("AIF1DAC2 3D Stereo Volume", WM8994_AIF1_DAC2_FILTERS_2,
@@ -1969,7 +2002,7 @@ static int opclk_divs[] = { 10, 20, 30, 40, 55, 60, 80, 120, 160 };
 static int wm8994_set_fll(struct snd_soc_dai *dai, int id, int src,
 			  unsigned int freq_in, unsigned int freq_out)
 {
-	dprintk("[zsb] wm8994_set_fll\n");
+	//dprintk("[zsb] wm8994_set_fll\n");
 	return _wm8994_set_fll(dai->codec, id, src, freq_in, freq_out);
 }
 
@@ -1980,7 +2013,7 @@ static int wm8994_set_dai_sysclk(struct snd_soc_dai *dai,
 	struct wm8994_priv *wm8994 = snd_soc_codec_get_drvdata(codec);
 	int i;
 
-	dprintk("[zsb] wm8994_set_dai_sysclk\n");
+	//dprintk("[zsb] wm8994_set_dai_sysclk\n");
 	switch (dai->id) {
 	case 1:
 	case 2:
@@ -2051,7 +2084,7 @@ static int wm8994_set_bias_level(struct snd_soc_codec *codec,
 	struct wm8994 *control = codec->control_data;
 	struct wm8994_priv *wm8994 = snd_soc_codec_get_drvdata(codec);
 
-	dprintk("[zsb] wm8994_set_bias_level: %d\n", level);
+	//dprintk("[zsb] wm8994_set_bias_level: %d\n", level);
 	switch (level) {
 	case SND_SOC_BIAS_ON:
 		break;
@@ -2199,7 +2232,7 @@ static int wm8994_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	int ms = 0;
 	int aif1 = 0;
 
-	dprintk("[zsb] wm8994_set_dai_fmt: id : %d\n", dai->id);
+	//dprintk("[zsb] wm8994_set_dai_fmt: id : %d\n", dai->id);
 	switch (dai->id) {
 	case 1:
 		ms_reg = WM8994_AIF1_MASTER_SLAVE;
@@ -2342,7 +2375,7 @@ static int wm8994_hw_params(struct snd_pcm_substream *substream,
 
 	int i, cur_val, best_val, bclk_rate, best;
 
-	dprintk("[zsb] wm8994_hw_params\n");
+	//dprintk("[zsb] wm8994_hw_params\n");
 	switch (dai->id) {
 	case 1:
 		aif1_reg = WM8994_AIF1_CONTROL_1;
@@ -2575,7 +2608,7 @@ static int wm8994_aif_mute(struct snd_soc_dai *codec_dai, int mute)
 	int mute_reg;
 	int reg;
 	
-	dprintk("[zsb] wm8994_aif_mute id:%d mute:%d\n", codec_dai->id, mute);
+	//dprintk("[zsb] wm8994_aif_mute id:%d mute:%d\n", codec_dai->id, mute);
 	switch (codec_dai->id) {
 	case 1:
 		mute_reg = WM8994_AIF1_DAC1_FILTERS_1;
@@ -3978,6 +4011,17 @@ static int wm8994_codec_probe(struct snd_soc_codec *codec)
 		wm8958_dsp2_init(codec);
 		break;
 	}
+#ifdef CONFIG_SND_VOODOO
+	voodoo_hook_wm8994_pcm_probe(codec);
+#endif
+
+#ifdef CONFIG_SND_BOEFFLA
+	Boeffla_sound_hook_wm8994_pcm_probe(codec);
+#endif
+
+#ifdef CONFIG_SND_WOLFSON_SOUND_CONTROL
+	Wolfson_sound_hook_wm8994_pcm_probe(codec);
+#endif
 
 	return 0;
 

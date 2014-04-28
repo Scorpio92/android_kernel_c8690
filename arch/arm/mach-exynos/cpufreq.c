@@ -711,7 +711,18 @@ static int exynos_cpufreq_cpu_init(struct cpufreq_policy *policy)
 		cpumask_setall(policy->cpus);
 	}
 
-	return cpufreq_frequency_table_cpuinfo(policy, exynos_info->freq_table);
+cpufreq_frequency_table_cpuinfo(policy, exynos_info->freq_table);
+
+	/* Keep stock frq. as default startup frq. */
+#ifdef CONFIG_EXYNOS_CPU_FREQ_SET_MIN_MAX
+	policy->max = CONFIG_EXYNOS_CPU_FREQ_MAX;
+	policy->min = CONFIG_EXYNOS_CPU_FREQ_MIN;
+#else
+	policy->max = 1400000;
+	policy->min = 200000;
+#endif
+
+	return 0;
 }
 
 static int exynos_cpufreq_reboot_notifier_call(struct notifier_block *this,
@@ -822,3 +833,17 @@ err_vdd_arm:
 	return -EINVAL;
 }
 late_initcall(exynos_cpufreq_init);
+
+/* sysfs interface for ASV level */
+ssize_t show_asv_level(struct cpufreq_policy *policy, char *buf) {
+
+	return sprintf(buf, "ASV level: %d\n",exynos_result_of_asv); 
+
+}
+
+extern ssize_t store_asv_level(struct cpufreq_policy *policy,
+                                      const char *buf, size_t count) {
+
+	// the store function does not do anything
+	return count;
+}

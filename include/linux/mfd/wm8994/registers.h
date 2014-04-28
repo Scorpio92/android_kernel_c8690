@@ -26,6 +26,7 @@
 #define WM8994_POWER_MANAGEMENT_5               0x05
 #define WM8994_POWER_MANAGEMENT_6               0x06
 #define WM8994_INPUT_MIXER_1                    0x15
+#define WM8994_IN1L_VU                          0x16
 #define WM8994_LEFT_LINE_INPUT_1_2_VOLUME       0x18
 #define WM8994_LEFT_LINE_INPUT_3_4_VOLUME       0x19
 #define WM8994_RIGHT_LINE_INPUT_1_2_VOLUME      0x1A
@@ -72,6 +73,7 @@
 #define WM8994_DC_SERVO_2                       0x55
 #define WM8994_DC_SERVO_4                       0x57
 #define WM8994_DC_SERVO_READBACK                0x58
+#define WM8994_DC_SERVO_4E			            0x59
 #define WM8994_ANALOGUE_HP_1                    0x60
 #define WM8958_MIC_DETECT_1                     0xD0
 #define WM8958_MIC_DETECT_2                     0xD1

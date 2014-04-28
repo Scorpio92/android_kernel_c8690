@@ -170,29 +170,18 @@ static unsigned int get_nr_run_avg(void)
 #define HOTPLUG_DOWN_INDEX			(0)
 #define HOTPLUG_UP_INDEX			(1)
 
-#ifdef CONFIG_MACH_MIDAS
+
 static int hotplug_rq[4][2] = {
-	{0, 100}, {100, 200}, {200, 300}, {300, 0}
+	{0, 150}, {100, 250}, {200, 400}, {350, 0}
 };
 
 static int hotplug_freq[4][2] = {
 	{0, 500000},
-	{200000, 500000},
-	{200000, 500000},
-	{200000, 0}
-};
-#else
-static int hotplug_rq[4][2] = {
-	{0, 100}, {100, 200}, {200, 300}, {300, 0}
+	{300000, 700000},
+	{400000, 900000},
+	{500000, 0}
 };
 
-static int hotplug_freq[4][2] = {
-	{0, 500000},
-	{200000, 500000},
-	{200000, 500000},
-	{200000, 0}
-};
-#endif
 
 static unsigned int min_sampling_rate;
 
@@ -1297,8 +1286,8 @@ static void cpufreq_pegasusq_early_suspend(struct early_suspend *h)
 #endif
 	prev_freq_step = dbs_tuners_ins.freq_step;
 	prev_sampling_rate = dbs_tuners_ins.sampling_rate;
-	dbs_tuners_ins.freq_step = 20;
-	dbs_tuners_ins.sampling_rate *= 4;
+	dbs_tuners_ins.freq_step = 10;
+	dbs_tuners_ins.sampling_rate = 200000;
 #if EARLYSUSPEND_HOTPLUGLOCK
 	atomic_set(&g_hotplug_lock,
 	    (dbs_tuners_ins.min_cpu_lock) ? dbs_tuners_ins.min_cpu_lock : 1);
@@ -1372,7 +1361,7 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 
 			min_sampling_rate = MIN_SAMPLING_RATE;
 			dbs_tuners_ins.sampling_rate = DEF_SAMPLING_RATE;
-			dbs_tuners_ins.io_is_busy = 0;
+			dbs_tuners_ins.io_is_busy = 1;
 		}
 		mutex_unlock(&dbs_mutex);
 

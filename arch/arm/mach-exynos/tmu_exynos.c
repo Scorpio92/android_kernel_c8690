@@ -44,6 +44,8 @@
 #include <mach/dev.h>
 #endif
 
+#define TMU_ERROR_CHECK  //jeff
+
 static enum {
 ENABLE_TEMP_MON	= 0x1,
 ENABLE_TEST_MODE = 0x2,
@@ -94,6 +96,12 @@ static unsigned int get_curr_temp(struct s5p_tmu_info *info)
 	/* Check range of temprature code with curr_temp_code & efusing info */
 	pr_debug("CURRENT_TEMP = 0x%02x\n", curr_temp_code);
 #if defined(CONFIG_CPU_EXYNOS4212) || defined(CONFIG_CPU_EXYNOS4412)
+    //jeff, add for TMU error check, if TMU_CURRENT_TEMP is 0xff, TMU is abnormal
+#ifdef TMU_ERROR_CHECK
+    if(curr_temp_code == 0xff)
+        return curr_temp_code;
+#endif
+    //end
 	/* temperature code range are between min 10 and 125 */
 	if ((info->te1 - curr_temp_code) > 15
 		|| (curr_temp_code - info->te1) > 100)
@@ -390,7 +398,7 @@ void set_refresh_rate(unsigned int auto_refresh)
 	pr_debug("set_auto_refresh = 0x%02x\n", auto_refresh);
 
 #ifdef CONFIG_ARCH_EXYNOS4
-#ifdef CONFIG_ARM_TRUSTZONE
+#if defined(CONFIG_ARM_TRUSTZONE) && !defined(CONFIG_MACH_STUTTGART)
 	exynos_smc(SMC_CMD_REG,
 		SMC_REG_ID_SFR_W((EXYNOS4_PA_DMC0_4212 + TIMING_AREF_OFFSET)),
 		auto_refresh, 0);
@@ -469,7 +477,8 @@ static void exynos_interrupt_enable(struct s5p_tmu_info *info, int enable)
 		__raw_writel(0x0, info->tmu_base + EXYNOS4_TMU_INTEN);
 }
 
-#if defined(CONFIG_TC_VOLTAGE)
+#ifdef CONFIG_TC_VOLTAGE
+
 /**
  * exynos_tc_volt - locks or frees vdd_arm, vdd_mif/int and vdd_g3d for
  * temperature compensation.
@@ -479,14 +488,12 @@ static void exynos_interrupt_enable(struct s5p_tmu_info *info, int enable)
  */
 static int exynos_tc_volt(struct s5p_tmu_info *info, int enable)
 {
-	struct s5p_platform_tmu *data;
+	struct s5p_platform_tmu *data = info->dev->platform_data;
 	static int usage;
 	int ret = 0;
 
-	if (!info || !(info->dev))
+	if (!info)
 		return -EPERM;
-
-	data = info->dev->platform_data;
 
 	if (enable == usage) {
 		pr_debug("TMU: already is %s.\n",
@@ -503,14 +510,12 @@ static int exynos_tc_volt(struct s5p_tmu_info *info, int enable)
 		if (ret)
 			goto err_lock;
 #endif
-#if defined(CONFIG_VIDEO_MALI400MP)
 		ret = mali_voltage_lock_push(data->temp_compensate.g3d_volt);
 		if (ret < 0) {
 			pr_err("TMU: g3d_push error: %u uV\n",
 				data->temp_compensate.g3d_volt);
 			goto err_lock;
 		}
-#endif
 	} else {
 		exynos_cpufreq_lock_free(DVFS_LOCK_ID_TMU);
 #ifdef CONFIG_BUSFREQ_OPP
@@ -518,13 +523,11 @@ static int exynos_tc_volt(struct s5p_tmu_info *info, int enable)
 		if (ret)
 			goto err_unlock;
 #endif
-#if defined(CONFIG_VIDEO_MALI400MP)
 		ret = mali_voltage_lock_pop();
 		if (ret < 0) {
 			pr_err("TMU: g3d_pop error\n");
 			goto err_unlock;
 		}
-#endif
 	}
 	usage = enable;
 	pr_info("TMU: %s is ok!\n", enable ? "lock" : "unlock");
@@ -536,6 +539,7 @@ err_unlock:
 	return ret;
 }
 #endif
+
 
 static void exynos4_handler_tmu_state(struct work_struct *work)
 {
@@ -600,7 +604,7 @@ static void exynos4_handler_tmu_state(struct work_struct *work)
 			}
 			pr_debug("check_handle = %d\n", check_handle);
 			notify_change_of_tmu_state(info);
-			pr_info("normal: free cpufreq_limit & interrupt enable.\n");
+			//pr_info("normal: free cpufreq_limit & interrupt enable.\n");
 
 			/* clear to prevent from interfupt by peindig bit */
 			__raw_writel(INTCLEARALL,
@@ -1111,7 +1115,7 @@ static int __devinit s5p_tmu_probe(struct platform_device *pdev)
 		&info->cpulevel_tc) < 0) {
 		dev_err(&pdev->dev, "cpufreq_get_level error\n");
 		ret = -EINVAL;
-		goto err_nores;
+		goto err_nomem;
 	}
 #ifdef CONFIG_BUSFREQ_OPP
 	/* To lock bus frequency in OPP mode */
@@ -1119,13 +1123,13 @@ static int __devinit s5p_tmu_probe(struct platform_device *pdev)
 	if (info->bus_dev < 0) {
 		dev_err(&pdev->dev, "Failed to get_dev\n");
 		ret = -EINVAL;
-		goto err_nores;
+		goto err_nomem;
 	}
 	if (exynos4x12_find_busfreq_by_volt(pdata->temp_compensate.bus_volt,
 		&info->busfreq_tc)) {
 		dev_err(&pdev->dev, "get_busfreq_value error\n");
 		ret = -EINVAL;
-		goto err_nores;
+		goto err_nomem;
 	}
 #endif
 	pr_info("%s: cpufreq_level[%u], busfreq_value[%u]\n",
@@ -1198,6 +1202,10 @@ static int __devinit s5p_tmu_probe(struct platform_device *pdev)
 	else
 		ret = request_irq(info->irq, exynos4x12_tmu_irq_handler,
 				IRQF_DISABLED,  "s5p-tmu interrupt", info);
+    //jeff, add for TMU error check, 
+#ifdef TMU_ERROR_CHECK
+    disable_irq(info->irq);
+#endif 
 
 	if (ret) {
 		dev_err(&pdev->dev, "request_irq is failed. %d\n", ret);
@@ -1224,6 +1232,25 @@ static int __devinit s5p_tmu_probe(struct platform_device *pdev)
 	ret = tmu_initialize(pdev);
 	if (ret)
 		goto err_init;
+//jeff, add for TMU error check, if TMU_CURRENT_TEMP is 0xff, TMU is abnormal
+#ifdef TMU_ERROR_CHECK
+#define POLLING_TIME 10
+    do {
+        int i = 0;
+        while(i++ < POLLING_TIME) {
+            if(get_curr_temp(info) == 0xff){
+               pr_err("TMU : TMU works error at %d poll, init failure !!!", i); //error
+               ret = -ENODEV;
+               goto err_init;
+            }
+            msleep(10);
+        }
+    }while(0);
+
+    pr_info("TMU checked OK\n");
+    enable_irq(info->irq); 
+#endif
+//end
 
 #ifdef CONFIG_TMU_SYSFS
 	ret = device_create_file(&pdev->dev, &dev_attr_curr_temp);
@@ -1250,10 +1277,8 @@ static int __devinit s5p_tmu_probe(struct platform_device *pdev)
 		if (exynos_tc_volt(info, 1) < 0)
 			pr_err("TMU: lock error!\n");
 	}
-#if defined(CONFIG_VIDEO_MALI400MP)
 	if (mali_voltage_lock_init())
 		pr_err("Failed to initialize mail voltage lock.\n");
-#endif
 #endif
 
 	/* initialize tmu_state */
@@ -1276,6 +1301,10 @@ err_sysfs_file1:
 		free_irq(info->irq, info);
 
 err_irq:
+    if (mask & ENABLE_TEMP_MON) {
+        cancel_delayed_work(&info->monitor);  //jeff
+    }
+    cancel_delayed_work(&info->polling);
 	destroy_workqueue(tmu_monitor_wq);
 
 err_wq:
@@ -1298,6 +1327,11 @@ err_nomem:
 static int __devinit s5p_tmu_remove(struct platform_device *pdev)
 {
 	struct s5p_tmu_info *info = platform_get_drvdata(pdev);
+    unsigned int mask = (enable_mask & ENABLE_DBGMASK);
+   
+    if (mask & ENABLE_TEMP_MON) {
+        cancel_delayed_work(&info->monitor);  
+    }
 
 	cancel_delayed_work(&info->polling);
 	destroy_workqueue(tmu_monitor_wq);
@@ -1362,12 +1396,10 @@ static int s5p_tmu_suspend(struct platform_device *pdev, pm_message_t state)
 static int s5p_tmu_resume(struct platform_device *pdev)
 {
 	struct s5p_tmu_info *info = platform_get_drvdata(pdev);
-	struct s5p_platform_tmu *data;
+	struct s5p_platform_tmu *data = info->dev->platform_data;
 
-	if (!info || !(info->dev))
+	if (!info)
 		return -EAGAIN;
-
-	data = info->dev->platform_data;
 
 	/* restore tmu register value */
 	__raw_writel(info->reg_save[0], info->tmu_base + EXYNOS4_TMU_CONTROL);

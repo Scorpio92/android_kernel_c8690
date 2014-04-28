@@ -1,0 +1,6 @@
+config EXYNOS_MEDIA_MONITOR
+	bool "MEDIA MONITOR"
+	depends on VIDEO_SAMSUNG
+	default n
+	help
+	  This is for Voodoo sound and MDNIE.

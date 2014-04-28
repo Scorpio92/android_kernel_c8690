@@ -37,6 +37,14 @@ config FB_S5P_TRACE_UNDERRUN
 	bool "S5P Framebuffer FIFO underrun trace"
 	depends on FB_S5P
 
+config FB_S5P_VSYNC_SYSFS
+    bool "S5P Framebuffer vsync via sysfs"
+    depends on FB_S5P_VSYNC_THREAD
+    default n
+    help
+    A more efficient method of passing vsync to userspace that doesn't
+    broadcast uevents.
+
 config FB_S5P_DEFAULT_WINDOW
 	int "Default Window (0-4)"
 	depends on FB_S5P
@@ -90,6 +98,14 @@ config FB_S5P_MDNIE
 	default "0"
 	---help---
 	This enables support for Samsung MDNIE feature
+
+config FB_S5P_MDNIE_CONTROL
+	bool "Samsung MDNIE Register Value Intercept Control"
+	depends on FB_S5P
+	depends on FB_S5P_MDNIE
+	default "0"
+	---help---
+	This enables control support for Samsung MDNIE feature
 
 config FB_MDNIE_PWM
 	bool "Samsung MDNIE PWM"
